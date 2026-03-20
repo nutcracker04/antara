@@ -1,14 +1,15 @@
-from fastapi import FastAPI, APIRouter
-from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-import os
 import logging
-from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
+import os
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import List, Literal
+
+from dotenv import load_dotenv
+from fastapi import APIRouter, FastAPI
+from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel, ConfigDict, Field
+from starlette.middleware.cors import CORSMiddleware
 
 
 ROOT_DIR = Path(__file__).parent
@@ -20,7 +21,7 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
 # Create the main app without a prefix
-app = FastAPI()
+app = FastAPI(title="Memory Capsule API")
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
@@ -37,10 +38,30 @@ class StatusCheck(BaseModel):
 class StatusCheckCreate(BaseModel):
     client_name: str
 
+
+class HealthResponse(BaseModel):
+    status: Literal["ok"] = "ok"
+    service: str = "memory-capsule-api"
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class AppInfo(BaseModel):
+    name: str = "Memory Capsule"
+    mode: str = "local-first"
+    description: str = "Privacy-first voice memory capture with on-device processing."
+    assistant_available: bool = False
+    payments_enabled: bool = False
+    storage: str = "IndexedDB on-device"
+
 # Add your routes to the router instead of directly to app
-@api_router.get("/")
+@api_router.get("/", response_model=AppInfo)
 async def root():
-    return {"message": "Hello World"}
+    return AppInfo()
+
+
+@api_router.get("/health", response_model=HealthResponse)
+async def health_check():
+    return HealthResponse()
 
 @api_router.post("/status", response_model=StatusCheck)
 async def create_status_check(input: StatusCheckCreate):

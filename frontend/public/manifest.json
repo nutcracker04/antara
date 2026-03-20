@@ -1,0 +1,17 @@
+{
+  "short_name": "Memory Capsule",
+  "name": "Memory Capsule - Local First Voice Memory Journal",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#FDFBF7",
+  "theme_color": "#FDFBF7",
+  "description": "Capture and revisit voice memories with local-first transcription and search.",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
