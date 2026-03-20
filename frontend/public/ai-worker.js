@@ -1,4 +1,4 @@
-import { env, pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@latest/+esm";
+import { env, pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/+esm";
 
 env.allowRemoteModels = true;
 env.useBrowserCache = true;
@@ -22,6 +22,7 @@ async function getTranscriber() {
   if (!transcriberPromise) {
     postStatus("Loading the on-device transcription model…", "loading-transcriber");
     transcriberPromise = pipeline("automatic-speech-recognition", MODELS.transcriber, {
+      dtype: "q8",
       progress_callback: () => {
         postStatus("Transcription model is loading locally…", "loading-transcriber");
       },
@@ -35,6 +36,7 @@ async function getEmbedder() {
   if (!embedderPromise) {
     postStatus("Loading the local search model…", "loading-embedder");
     embedderPromise = pipeline("feature-extraction", MODELS.embedder, {
+      dtype: "q8",
       progress_callback: () => {
         postStatus("Search model is loading locally…", "loading-embedder");
       },
