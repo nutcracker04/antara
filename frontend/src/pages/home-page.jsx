@@ -4,7 +4,7 @@ import { MemoryCard } from "@/components/ui/memory-card";
 import { VoiceWave } from "@/components/ui/voice-wave";
 import { useRecorder } from "@/hooks/use-recorder";
 
-export default function HomePage({ memories, modelStatus, onProcessRecording, processingState }) {
+export default function HomePage({ memories, modelStatus, onProcessRecording, preferences, processingState }) {
   const holdTimerRef = useRef(null);
   const holdTriggeredRef = useRef(false);
   const suppressClickRef = useRef(false);
@@ -61,10 +61,10 @@ export default function HomePage({ memories, modelStatus, onProcessRecording, pr
           <div className="flex items-center justify-between gap-4">
             <div>
               <p className="editorial-label" data-testid="recording-instructions-label">
-                Tap or hold
+                Capture a moment
               </p>
               <p className="mt-2 text-sm leading-relaxed text-[#4A4844]" data-testid="recording-instructions-text">
-                Tap once to start and stop. Hold for a quick capture that ends when you lift your finger.
+                Tap to begin and end a memory. Hold when you only want to catch a quick thought.
               </p>
             </div>
 
@@ -98,6 +98,11 @@ export default function HomePage({ memories, modelStatus, onProcessRecording, pr
             <span className="rounded-full border border-[#E8E4DB] bg-white/65 px-3 py-2 text-xs text-[#4A4844]" data-testid="model-status-chip">
               {modelStatus.label}
             </span>
+        {preferences.gentleMode ? (
+              <span className="rounded-full border border-[#E8E4DB] bg-white/65 px-3 py-2 text-xs text-[#4A4844]" data-testid="gentle-mode-chip">
+                Gentle mode is on
+              </span>
+            ) : null}
           </div>
 
           {error ? (
@@ -108,14 +113,40 @@ export default function HomePage({ memories, modelStatus, onProcessRecording, pr
         </div>
       </div>
 
+      <div className="grid gap-3 sm:grid-cols-3" data-testid="home-insights-grid">
+        <div className="glass-panel rounded-[24px] p-4" data-testid="insight-total-memories-card">
+          <p className="editorial-label">Saved</p>
+          <p className="mt-2 text-2xl text-[#1A1918]">{memories.length}</p>
+          <p className="mt-1 text-sm text-[#4A4844]">moments in your capsule</p>
+        </div>
+        <div className="glass-panel rounded-[24px] p-4" data-testid="insight-last-mood-card">
+          <p className="editorial-label">Latest tone</p>
+          <p className="mt-2 text-2xl capitalize text-[#1A1918]">{memories[0]?.emotion || "Calm"}</p>
+          <p className="mt-1 text-sm text-[#4A4844]">how your most recent note felt</p>
+        </div>
+        <div className="glass-panel rounded-[24px] p-4" data-testid="insight-home-view-card">
+          <p className="editorial-label">Home view</p>
+          <p className="mt-2 text-2xl text-[#1A1918]">{preferences.showSummariesFirst ? "Summary" : "Transcript"}</p>
+          <p className="mt-1 text-sm text-[#4A4844]">what Memory Capsule highlights first</p>
+        </div>
+      </div>
+
+      {preferences.captureReminders ? (
+        <div className="glass-panel rounded-[24px] p-4" data-testid="capture-reminder-card">
+          <p className="editorial-label">Gentle prompt</p>
+          <p className="mt-2 text-lg text-[#1A1918]">What felt worth remembering today?</p>
+          <p className="mt-1 text-sm leading-relaxed text-[#4A4844]">Use it whenever you want a nudge before recording.</p>
+        </div>
+      ) : null}
+
       <div className="space-y-4" data-testid="recent-memories-section">
         <div className="flex items-center justify-between gap-4">
           <div>
             <p className="editorial-label" data-testid="recent-memories-label">
-              Most recent memory
+              Your latest memory
             </p>
             <p className="mt-2 text-sm text-[#4A4844]" data-testid="recent-memories-copy">
-              Your latest voice note appears here right after local processing finishes.
+              The newest voice moment you save will appear here, ready to revisit whenever you need it.
             </p>
           </div>
           <div className="rounded-full border border-[#E8E4DB] bg-white/70 px-3 py-1 text-sm text-[#1A1918]" data-testid="recent-memory-count">
@@ -124,12 +155,12 @@ export default function HomePage({ memories, modelStatus, onProcessRecording, pr
         </div>
 
         {memories[0] ? (
-          <MemoryCard memory={memories[0]} />
+          <MemoryCard memory={memories[0]} showSummariesFirst={preferences.showSummariesFirst} />
         ) : (
           <div className="glass-panel rounded-[28px] p-5" data-testid="empty-home-state">
             <p className="text-lg text-[#1A1918]">Nothing recorded yet.</p>
             <p className="mt-2 text-sm leading-relaxed text-[#4A4844]">
-              Say a thought, a meeting note, or a feeling. The transcript, tags, and search fingerprint will stay local first.
+              Capture a thought, a meeting note, or a feeling. Your first memory will turn this space into something personal.
             </p>
           </div>
         )}

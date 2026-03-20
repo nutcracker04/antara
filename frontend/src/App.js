@@ -16,29 +16,29 @@ const PAGE_COPY = {
   "/": {
     label: "Voice capture",
     title: "A calm space for the memories you speak.",
-    description: "Tap once to start, hold for a quick thought, and keep everything on your device first.",
+    description: "Tap once to begin, hold for a quick thought, and keep every memory easy to revisit.",
   },
   "/memories": {
     label: "Memory library",
     title: "Your recent voice moments, organized gently.",
-    description: "Review transcripts, listen back, and filter by mood, date, or keywords.",
+    description: "Revisit your voice moments, search them, and filter by mood, date, or keywords.",
   },
   "/assistant": {
-    label: "Local assistant",
+    label: "Assistant",
     title: "Ask what your memories already know.",
-    description: "Search semantically across your saved voice notes without leaving the device-first flow.",
+    description: "Ask naturally about what you captured and get simple answers with the right references.",
   },
   "/settings": {
     label: "Settings",
-    title: "Private by default, installable when you are ready.",
-    description: "Manage local storage, app install, and device-side model readiness.",
+    title: "Shape the app around your rhythm.",
+    description: "Tune the feel of your capsule, keep things private, and save it to your home screen.",
   },
 };
 
 function MemoryCapsuleShell() {
   const location = useLocation();
   const appState = useMemoryCapsule();
-  const [backendHealth, setBackendHealth] = useState({ status: "checking", label: "Checking backend" });
+  const [backendHealth, setBackendHealth] = useState({ status: "checking", label: "Preparing your space" });
 
   useEffect(() => {
     let active = true;
@@ -47,11 +47,11 @@ function MemoryCapsuleShell() {
       try {
         await axios.get(`${API}/health`);
         if (active) {
-          setBackendHealth({ status: "ok", label: "Backend connected" });
+          setBackendHealth({ status: "ok", label: "Ready to listen" });
         }
       } catch (error) {
         if (active) {
-          setBackendHealth({ status: "offline", label: "Backend unavailable" });
+          setBackendHealth({ status: "offline", label: "Still getting ready" });
         }
       }
     };
@@ -85,13 +85,13 @@ function MemoryCapsuleShell() {
 
           <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-[#6F6A62]">
             <span className="rounded-full border border-[#E8E4DB] bg-white/60 px-3 py-1" data-testid="local-processing-chip">
-              On-device processing
+              Private by default
             </span>
             <span className="rounded-full border border-[#E8E4DB] bg-white/60 px-3 py-1" data-testid="memory-count-chip">
               {appState.memories.length} memories saved
             </span>
             <span className="rounded-full border border-[#E8E4DB] bg-white/60 px-3 py-1" data-testid="backend-status-chip">
-              {backendHealth.label}
+              {appState.modelStatus.stage === "ready" ? backendHealth.label : appState.modelStatus.label}
             </span>
           </div>
         </header>
@@ -104,24 +104,28 @@ function MemoryCapsuleShell() {
                 <HomePage
                   memories={appState.memories}
                   processingState={appState.processingState}
+                  preferences={appState.preferences}
                   modelStatus={appState.modelStatus}
                   onProcessRecording={appState.processRecording}
                 />
               }
             />
-            <Route path="/memories" element={<MemoriesPage isLoading={appState.isLoading} memories={appState.memories} />} />
+            <Route
+              path="/memories"
+              element={<MemoriesPage isLoading={appState.isLoading} memories={appState.memories} preferences={appState.preferences} />}
+            />
             <Route
               path="/assistant"
-              element={<AssistantPage askAssistant={appState.askAssistant} memories={appState.memories} modelStatus={appState.modelStatus} />}
+              element={<AssistantPage askAssistant={appState.askAssistant} memories={appState.memories} />}
             />
             <Route
               path="/settings"
               element={
                 <SettingsPage
-                  backendHealth={backendHealth}
                   clearAllMemories={appState.clearAllMemories}
                   memoryCount={appState.memories.length}
-                  modelStatus={appState.modelStatus}
+                  preferences={appState.preferences}
+                  updatePreference={appState.updatePreference}
                 />
               }
             />

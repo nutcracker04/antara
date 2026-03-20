@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 const EMOTION_FILTERS = ["all", "calm", "energetic", "sad"];
 const DATE_FILTERS = ["all", "today", "week"];
 
-export default function MemoriesPage({ isLoading, memories }) {
+export default function MemoriesPage({ isLoading, memories, preferences }) {
   const [keyword, setKeyword] = useState("");
   const [emotionFilter, setEmotionFilter] = useState("all");
   const [dateFilter, setDateFilter] = useState("all");
@@ -40,7 +40,7 @@ export default function MemoriesPage({ isLoading, memories }) {
         <div className="space-y-4">
           <div>
             <p className="editorial-label" data-testid="memory-search-label">
-              Search locally
+              Search memories
             </p>
             <Input
               className="mt-3 h-12 rounded-2xl border-[#E8E4DB] bg-white/70 px-4 text-sm text-[#1A1918] placeholder:text-[#8C8881]"
@@ -98,7 +98,12 @@ export default function MemoriesPage({ isLoading, memories }) {
       </div>
 
       <div className="flex items-center justify-between gap-4" data-testid="memory-results-header">
-        <p className="text-sm text-[#4A4844]">{isLoading ? "Loading your local library…" : `${filteredMemories.length} memories match your filters.`}</p>
+        <p className="text-sm text-[#4A4844]">
+          {isLoading ? "Opening your memory library…" : `${filteredMemories.length} memories match your view.`}
+        </p>
+        <p className="text-xs text-[#6F6A62]" data-testid="memory-results-preference-copy">
+          {preferences.showSummariesFirst ? "Summaries lead each memory card" : "Full transcripts take the lead"}
+        </p>
       </div>
 
       <div className="space-y-4" data-testid="memory-results-list">
@@ -110,7 +115,7 @@ export default function MemoriesPage({ isLoading, memories }) {
         ) : null}
 
         {filteredMemories.map((memory) => (
-          <MemoryCard key={memory.id} memory={memory} />
+          <MemoryCard key={memory.id} memory={memory} showSummariesFirst={preferences.showSummariesFirst} />
         ))}
       </div>
     </section>

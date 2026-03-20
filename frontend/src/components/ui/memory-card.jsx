@@ -10,7 +10,7 @@ const EMOTION_STYLES = {
   sad: "bg-[#ECEAF4] text-[#5B5776] border-[#DDD9EC]",
 };
 
-export function MemoryCard({ memory }) {
+export function MemoryCard({ memory, showSummariesFirst = true }) {
   const [audioUrl, setAudioUrl] = useState("");
 
   useEffect(() => {
@@ -42,14 +42,25 @@ export function MemoryCard({ memory }) {
           </Badge>
         </div>
 
-        <div className="space-y-2">
-          <p className="text-lg leading-relaxed text-[#1A1918]" data-testid={`memory-card-summary-${memory.id}`}>
-            {memory.summary}
-          </p>
-          <p className="text-sm leading-relaxed text-[#4A4844]" data-testid={`memory-card-transcript-${memory.id}`}>
-            {memory.transcript}
-          </p>
-        </div>
+        {showSummariesFirst ? (
+          <div className="space-y-2">
+            <p className="text-lg leading-relaxed text-[#1A1918]" data-testid={`memory-card-summary-${memory.id}`}>
+              {memory.summary}
+            </p>
+            <p className="text-sm leading-relaxed text-[#4A4844]" data-testid={`memory-card-transcript-${memory.id}`}>
+              {memory.transcript}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-sm leading-relaxed text-[#4A4844]" data-testid={`memory-card-transcript-${memory.id}`}>
+              {memory.transcript}
+            </p>
+            <p className="text-lg leading-relaxed text-[#1A1918]" data-testid={`memory-card-summary-${memory.id}`}>
+              {memory.summary}
+            </p>
+          </div>
+        )}
 
         {audioUrl ? (
           <audio className="w-full" controls data-testid={`memory-card-audio-${memory.id}`} src={audioUrl} />

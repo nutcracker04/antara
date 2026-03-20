@@ -9,6 +9,7 @@ Build **Memory Capsule**, a mobile-first Progressive Web App (PWA) that captures
 - Payments deferred to the next phase
 - Design direction: calm, minimal, soft motion
 - MVP priority: voice capture plus local memory storage
+- Product copy should feel consumer-ready, with technical language removed from the end-user experience
 
 ## Architecture Decisions
 - **Frontend-first local experience:** React app drives the full UX with mobile-first routing, bottom navigation, PWA manifest, and service worker shell
@@ -19,6 +20,7 @@ Build **Memory Capsule**, a mobile-first Progressive Web App (PWA) that captures
 - **Storage:** IndexedDB via `idb` for local memory objects including transcript, summary, tags, emotion, embeddings, and audio blob
 - **Assistant:** local semantic retrieval and template-based local answers from saved memories only in this phase
 - **Backend:** FastAPI health/info endpoints retained for full-stack integrity; no cloud LLM proxy or payment endpoints in this phase
+- **Preferences layer:** local preference storage for product-facing behaviors like summaries-first, gentle mode, and capture reminder prompts
 
 ## User Personas
 - People capturing fleeting personal thoughts or ADHD reminders
@@ -35,12 +37,13 @@ Build **Memory Capsule**, a mobile-first Progressive Web App (PWA) that captures
 - Local semantic retrieval across saved memories
 - Privacy-first, installable mobile PWA shell
 - Simple assistant interface for local answers and references
+- Consumer-friendly product copy without exposing internal implementation details
 
 ## What Has Been Implemented
 ### 2026-03-20
 - Replaced starter UI with a calm, mobile-first Memory Capsule experience across Capture, Memories, Assistant, and Settings routes
 - Built animated voice wave UI with amplitude/frequency-driven visual behavior and tap/hold recording interactions
-- Added MediaRecorder capture hook with live audio analysis and local processing states
+- Added MediaRecorder capture hook with live audio analysis and memory processing states
 - Added on-device AI worker for Whisper transcription and MiniLM embeddings
 - Implemented IndexedDB local memory storage for transcript, summary, tags, emotion, embeddings, audio blob, and timestamps
 - Implemented local semantic search and local assistant answer generation with references
@@ -48,6 +51,9 @@ Build **Memory Capsule**, a mobile-first Progressive Web App (PWA) that captures
 - Updated FastAPI backend with app info and health endpoints
 - Ran self-tests, screenshots, backend health checks, and a full testing-agent pass
 - Pinned Transformers CDN dependency to `3.8.1` for runtime stability
+- Productized the UI copy so the app reads like a user product instead of a developer demo
+- Added persistent product preferences: Gentle mode, Summaries first, and Capture reminders
+- Connected settings toggles to visible app behavior on the home and memory surfaces
 
 ## Prioritized Backlog
 ### P0

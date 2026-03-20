@@ -7,7 +7,7 @@ import { formatMemoryDate } from "@/lib/memory-utils";
 
 const PROMPTS = ["What did I say about focus?", "Summarize my last week", "When was I most stressed?"];
 
-export default function AssistantPage({ askAssistant, memories, modelStatus }) {
+export default function AssistantPage({ askAssistant, memories }) {
   const [answer, setAnswer] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [query, setQuery] = useState("");
@@ -31,10 +31,10 @@ export default function AssistantPage({ askAssistant, memories, modelStatus }) {
         <CardContent className="space-y-4 p-5">
           <div>
             <p className="editorial-label" data-testid="assistant-input-label">
-              Ask locally
+              Ask naturally
             </p>
             <p className="mt-2 text-sm leading-relaxed text-[#4A4844]" data-testid="assistant-helper-text">
-              The assistant searches your saved memories semantically and answers from what is already on this device.
+              Ask about people, feelings, topics, or timeframes and Memory Capsule will surface the closest moments.
             </p>
           </div>
 
@@ -43,7 +43,7 @@ export default function AssistantPage({ askAssistant, memories, modelStatus }) {
               className="h-12 rounded-2xl border-[#E8E4DB] bg-white/70 px-4 text-sm"
               data-testid="assistant-query-input"
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Ask about people, topics, or feelings"
+              placeholder="Ask about people, moments, or feelings"
               value={query}
             />
             <Button
@@ -53,7 +53,7 @@ export default function AssistantPage({ askAssistant, memories, modelStatus }) {
               onClick={() => runQuery(query)}
               type="button"
             >
-              {isLoading ? "Thinking" : "Ask"}
+              {isLoading ? "Looking" : "Ask"}
             </Button>
           </div>
 
@@ -71,8 +71,8 @@ export default function AssistantPage({ askAssistant, memories, modelStatus }) {
             ))}
           </div>
 
-          <p className="text-xs text-[#6F6A62]" data-testid="assistant-model-status">
-            {modelStatus.label}
+          <p className="text-xs text-[#6F6A62]" data-testid="assistant-memory-count-copy">
+            {memories.length ? `${memories.length} memories ready to search` : "Save a memory to start asking questions"}
           </p>
         </CardContent>
       </Card>
@@ -84,7 +84,7 @@ export default function AssistantPage({ askAssistant, memories, modelStatus }) {
               Answer
             </p>
             <p className="mt-3 text-base leading-relaxed text-[#1A1918]" data-testid="assistant-answer-text">
-              {answer || "Ask a question to see a local answer with references from your saved memories."}
+              {answer || "Ask a question and your answer will appear here with the moments it came from."}
             </p>
           </div>
 

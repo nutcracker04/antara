@@ -11,6 +11,7 @@ import {
   summarizeTranscript,
   vectorSearch,
 } from "@/lib/memory-utils";
+import { DEFAULT_PREFERENCES, loadPreferences, savePreferences } from "@/lib/preferences";
 
 const defaultProcessingState = {
   stage: "idle",
@@ -19,8 +20,24 @@ const defaultProcessingState = {
 
 const defaultModelStatus = {
   stage: "idle",
-  label: "Local models load when needed.",
+  label: "Ready when you are.",
 };
+
+function toFriendlyModelStatus(payload) {
+  const labelMap = {
+    embedding: "Organizing your memory…",
+    error: "Something needs another try.",
+    "loading-embedder": "Getting your memory space ready…",
+    "loading-transcriber": "Getting your memory space ready…",
+    ready: "Ready when you are.",
+    transcribing: "Turning your words into a memory…",
+  };
+
+  return {
+    label: labelMap[payload.stage] || "Ready when you are.",
+    stage: payload.stage,
+  };
+}
 
 function createId() {
   return globalThis.crypto?.randomUUID?.() || `memory-${Date.now()}`;
@@ -62,6 +79,7 @@ export function useMemoryCapsule() {
   const [isLoading, setIsLoading] = useState(true);
   const [processingState, setProcessingState] = useState(defaultProcessingState);
   const [modelStatus, setModelStatus] = useState(defaultModelStatus);
+  const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES);
 
   useEffect(() => {
     let active = true;
@@ -71,6 +89,7 @@ export function useMemoryCapsule() {
         const storedMemories = await getMemories();
         if (active) {
           setMemories(storedMemories);
+          setPreferences(loadPreferences());
         }
       } catch (error) {
         toast.error("I couldn't load your saved memories.");
@@ -85,7 +104,7 @@ export function useMemoryCapsule() {
 
     const unsubscribe = subscribeToAIStatus((payload) => {
       if (active) {
-        setModelStatus(payload);
+        setModelStatus(toFriendlyModelStatus(payload));
       }
     });
 
@@ -102,17 +121,17 @@ export function useMemoryCapsule() {
 
   const processRecording = useCallback(async ({ averageAmplitude, blob, durationMs, frequency }) => {
     try {
-      setProcessingState({ stage: "preparing", message: "Preparing your voice note locally…" });
+      setProcessingState({ stage: "preparing", message: "Getting your memory ready…" });
       const decodedAudio = await decodeAudioBlob(blob);
 
-      setProcessingState({ stage: "transcribing", message: "Transcribing on this device…" });
+      setProcessingState({ stage: "transcribing", message: "Turning your words into text…" });
       const transcript = normalizeTranscript(await transcribeAudio(decodedAudio));
 
       if (!transcript) {
         throw new Error("No speech was detected. Try recording a little longer.");
       }
 
-      setProcessingState({ stage: "embedding", message: "Creating a memory fingerprint for local search…" });
+      setProcessingState({ stage: "embedding", message: "Saving it so you can find it later…" });
       const embedding = await embedText(transcript);
 
       const memory = {
@@ -131,8 +150,8 @@ export function useMemoryCapsule() {
 
       await saveMemory(memory);
       setMemories((currentMemories) => sortMemoriesByNewest([memory, ...currentMemories]));
-      setProcessingState({ stage: "saved", message: "Saved locally. It stays on this device first." });
-      toast.success("Memory saved on this device.");
+      setProcessingState({ stage: "saved", message: "Saved to your capsule." });
+      toast.success("Saved to your capsule.");
       return memory;
     } catch (error) {
       setProcessingState({ stage: "error", message: error.message || "Something went wrong while processing your memory." });
@@ -161,7 +180,15 @@ export function useMemoryCapsule() {
   const clearAllMemories = useCallback(async () => {
     await clearMemories();
     setMemories([]);
-    toast.success("All local memories were cleared.");
+    toast.success("Your capsule was cleared.");
+  }, []);
+
+  const updatePreference = useCallback((key, value) => {
+    setPreferences((currentPreferences) => {
+      const nextPreferences = { ...currentPreferences, [key]: value };
+      savePreferences(nextPreferences);
+      return nextPreferences;
+    });
   }, []);
 
   return {
@@ -170,7 +197,9 @@ export function useMemoryCapsule() {
     isLoading,
     memories,
     modelStatus,
+    preferences,
     processRecording,
     processingState,
+    updatePreference,
   };
 }
