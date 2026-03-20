@@ -37,6 +37,55 @@ let webpackConfig = {
       '@': path.resolve(__dirname, 'src'),
     },
     configure: (webpackConfig) => {
+      if (process.env.NODE_ENV === "production") {
+        const { GenerateSW } = require("workbox-webpack-plugin");
+        const publicUrl = process.env.PUBLIC_URL || "";
+
+        webpackConfig.plugins.push(
+          new GenerateSW({
+            clientsClaim: true,
+            skipWaiting: true,
+            maximumFileSizeToCacheInBytes: 50 * 1024 * 1024,
+            navigateFallback: `${publicUrl}/index.html`.replace(/\/+/g, "/"),
+            navigateFallbackDenylist: [/^\/_/, /\/[^/?]+\.[^/]+$/],
+            runtimeCaching: [
+              {
+                handler: "CacheFirst",
+                options: {
+                  cacheName: "memory-capsule-models-v1",
+                  expiration: {
+                    maxAgeSeconds: 60 * 60 * 24 * 30,
+                    maxEntries: 100,
+                    purgeOnQuotaError: true,
+                  },
+                },
+                urlPattern: ({ url }) =>
+                  url.hostname === "huggingface.co" ||
+                  url.hostname === "cdn.jsdelivr.net" ||
+                  url.hostname.endsWith(".hf.co"),
+              },
+              {
+                handler: "CacheFirst",
+                options: {
+                  cacheName: "memory-capsule-runtime-v1",
+                  expiration: {
+                    maxAgeSeconds: 60 * 60 * 24 * 7,
+                    maxEntries: 40,
+                    purgeOnQuotaError: true,
+                  },
+                },
+                urlPattern: ({ request, url }) =>
+                  request.method === "GET" &&
+                  self.location.origin === url.origin &&
+                  (url.pathname === "/ai-worker.js" ||
+                    url.pathname === "/manifest.json" ||
+                    url.pathname.endsWith(".png") ||
+                    url.pathname.endsWith(".svg")),
+              },
+            ],
+          }),
+        );
+      }
 
       // Add ignored patterns to reduce watched directories
         webpackConfig.watchOptions = {

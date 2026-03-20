@@ -5,11 +5,13 @@ env.useBrowserCache = true;
 
 const MODELS = {
   embedder: "Xenova/all-MiniLM-L6-v2",
-  transcriber: "Xenova/whisper-tiny",
+  transcriberTiny: "Xenova/whisper-tiny",
+  transcriberBase: "Xenova/whisper-base",
 };
 
 let embedderPromise;
 let transcriberPromise;
+let transcriberConfigKey = "";
 
 function postStatus(label, stage) {
   self.postMessage({
@@ -18,18 +20,52 @@ function postStatus(label, stage) {
   });
 }
 
+function postProgress(id, percent, stage = "transcribing") {
+  self.postMessage({
+    id,
+    type: "progress",
+    payload: { percent, stage },
+  });
+}
+
+async function resolveTranscriberOptions() {
+  let device = "wasm";
+  let dtype = "q8";
+  let modelName = MODELS.transcriberTiny;
+
+  if (typeof navigator !== "undefined" && navigator.gpu) {
+    try {
+      const adapter = await navigator.gpu.requestAdapter();
+      if (adapter) {
+        device = "webgpu";
+        dtype = "fp16";
+        modelName = MODELS.transcriberBase;
+      }
+    } catch {
+      /* fall back */
+    }
+  }
+
+  return { device, dtype, modelName };
+}
+
 async function getTranscriber() {
-  if (!transcriberPromise) {
+  const options = await resolveTranscriberOptions();
+  const nextKey = `${options.modelName}|${options.device}|${options.dtype}`;
+
+  if (!transcriberPromise || transcriberConfigKey !== nextKey) {
+    transcriberConfigKey = nextKey;
     postStatus("Loading the on-device transcription model…", "loading-transcriber");
-    transcriberPromise = pipeline("automatic-speech-recognition", MODELS.transcriber, {
-      dtype: "q8",
+    transcriberPromise = pipeline("automatic-speech-recognition", options.modelName, {
+      dtype: options.dtype,
+      device: options.device,
       progress_callback: () => {
         postStatus("Transcription model is loading locally…", "loading-transcriber");
       },
     });
   }
 
-  return transcriberPromise;
+  return { transcriber: await transcriberPromise, options };
 }
 
 async function getEmbedder() {
@@ -58,21 +94,45 @@ self.onmessage = async (event) => {
     }
 
     if (type === "TRANSCRIBE") {
-      const transcriber = await getTranscriber();
+      const { transcriber, options } = await getTranscriber();
       postStatus("Transcribing on this device…", "transcribing");
 
       const audioData = payload.audioData instanceof Float32Array ? payload.audioData : new Float32Array(payload.audioData || []);
-      const result = await transcriber(audioData, {
+
+      postProgress(id, 4, "transcribing");
+
+      let progressTimer;
+      let progressValue = 4;
+      progressTimer = setInterval(() => {
+        progressValue = Math.min(progressValue + 6, 88);
+        postProgress(id, progressValue, "transcribing");
+      }, 450);
+
+      const asrOptions = {
         chunk_length_s: 20,
         return_timestamps: false,
         stride_length_s: 4,
-      });
+      };
+
+      let result;
+      try {
+        result = await transcriber(audioData, asrOptions);
+      } finally {
+        clearInterval(progressTimer);
+      }
+
+      postProgress(id, 100, "transcribing");
+
+      const text = typeof result === "string" ? result : result?.text || "";
 
       postStatus("Transcription finished locally.", "ready");
       self.postMessage({
         id,
         type: "success",
-        payload: { text: typeof result === "string" ? result : result.text || "" },
+        payload: {
+          text,
+          transcriptionModel: `${options.modelName}|${options.device}|${options.dtype}`,
+        },
       });
       return;
     }

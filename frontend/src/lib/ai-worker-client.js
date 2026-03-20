@@ -29,6 +29,15 @@ function getWorker() {
       return;
     }
 
+    if (type === "progress") {
+      notifyStatus({
+        stage: "transcribing",
+        label: `Transcribing… ${payload.percent}%`,
+        percent: payload.percent,
+      });
+      return;
+    }
+
     const request = pendingRequests.get(id);
     if (!request) {
       return;
@@ -85,7 +94,10 @@ export function warmupLocalModels() {
 
 export async function transcribeAudio(audioData) {
   const response = await sendMessage("TRANSCRIBE", { audioData });
-  return response.text || "";
+  return {
+    text: response.text || "",
+    transcriptionModel: response.transcriptionModel || "whisper-tiny|wasm|q8",
+  };
 }
 
 export async function embedText(text) {

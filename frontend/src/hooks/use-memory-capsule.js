@@ -11,7 +11,9 @@ import {
   summarizeTranscript,
   vectorSearch,
 } from "@/lib/memory-utils";
-import { DEFAULT_PREFERENCES, loadPreferences, savePreferences } from "@/lib/preferences";
+import { DEFAULT_PREFERENCES } from "@/lib/preferences-defaults";
+import { loadPreferences, savePreferences } from "@/lib/preferences";
+import { summarizeWithPromptApi } from "@/lib/prompt-api";
 
 const defaultProcessingState = {
   stage: "idle",
@@ -32,6 +34,13 @@ function toFriendlyModelStatus(payload) {
     ready: "Ready when you are.",
     transcribing: "Turning your words into a memory…",
   };
+
+  if (payload.stage === "transcribing" && payload.percent != null) {
+    return {
+      label: `Transcribing… ${payload.percent}%`,
+      stage: payload.stage,
+    };
+  }
 
   return {
     label: labelMap[payload.stage] || "Ready when you are.",
@@ -79,17 +88,17 @@ export function useMemoryCapsule() {
   const [isLoading, setIsLoading] = useState(true);
   const [processingState, setProcessingState] = useState(defaultProcessingState);
   const [modelStatus, setModelStatus] = useState(defaultModelStatus);
-  const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES);
+  const [preferences, setPreferences] = useState(() => ({ ...DEFAULT_PREFERENCES }));
 
   useEffect(() => {
     let active = true;
 
     const loadMemories = async () => {
       try {
-        const storedMemories = await getMemories();
+        const [storedMemories, prefs] = await Promise.all([getMemories(), loadPreferences()]);
         if (active) {
           setMemories(storedMemories);
-          setPreferences(loadPreferences());
+          setPreferences(prefs);
         }
       } catch (error) {
         toast.error("I couldn't load your saved memories.");
@@ -119,46 +128,70 @@ export function useMemoryCapsule() {
     };
   }, []);
 
-  const processRecording = useCallback(async ({ averageAmplitude, blob, durationMs, frequency }) => {
-    try {
-      setProcessingState({ stage: "preparing", message: "Getting your memory ready…" });
-      const decodedAudio = await decodeAudioBlob(blob);
+  const processRecording = useCallback(
+    async ({ averageAmplitude, blob, durationMs, frequency }) => {
+      const transcriptionStartedAt = performance.now();
 
-      setProcessingState({ stage: "transcribing", message: "Turning your words into text…" });
-      const transcript = normalizeTranscript(await transcribeAudio(decodedAudio));
+      try {
+        setProcessingState({ stage: "preparing", message: "Getting your memory ready…" });
+        const decodedAudio = await decodeAudioBlob(blob);
 
-      if (!transcript) {
-        throw new Error("No speech was detected. Try recording a little longer.");
+        setProcessingState({ stage: "transcribing", message: "Turning your words into text…" });
+        const { text: transcriptRaw, transcriptionModel } = await transcribeAudio(decodedAudio);
+        const transcript = normalizeTranscript(transcriptRaw);
+        const transcriptionDuration = Math.round(performance.now() - transcriptionStartedAt);
+
+        if (!transcript) {
+          throw new Error("No speech was detected. Try recording a little longer.");
+        }
+
+        const prefs = await loadPreferences();
+
+        setProcessingState({ stage: "embedding", message: "Saving it so you can find it later…" });
+        const embedding = await embedText(transcript);
+
+        let summary;
+        let summarySource = "rule-based";
+
+        if (prefs.useGeminiNano) {
+          const result = await summarizeWithPromptApi(transcript);
+          summary = result.summary;
+          summarySource = result.source;
+        } else {
+          summary = summarizeTranscript(transcript);
+        }
+
+        const memory = {
+          id: createId(),
+          audioBlob: blob,
+          averageAmplitude,
+          createdAt: new Date().toISOString(),
+          durationMs,
+          embedding,
+          emotion: detectEmotion(transcript, averageAmplitude),
+          frequency,
+          summary,
+          summarySource,
+          tags: buildTags(transcript),
+          transcript,
+          transcriptionDuration,
+          transcriptionModel,
+          version: 2,
+        };
+
+        await saveMemory(memory);
+        setMemories((currentMemories) => sortMemoriesByNewest([memory, ...currentMemories]));
+        setProcessingState({ stage: "saved", message: "Saved to your capsule." });
+        toast.success("Saved to your capsule.");
+        return memory;
+      } catch (error) {
+        setProcessingState({ stage: "error", message: error.message || "Something went wrong while processing your memory." });
+        toast.error(error.message || "I couldn't process that recording.");
+        throw error;
       }
-
-      setProcessingState({ stage: "embedding", message: "Saving it so you can find it later…" });
-      const embedding = await embedText(transcript);
-
-      const memory = {
-        id: createId(),
-        audioBlob: blob,
-        averageAmplitude,
-        createdAt: new Date().toISOString(),
-        durationMs,
-        embedding,
-        emotion: detectEmotion(transcript, averageAmplitude),
-        frequency,
-        summary: summarizeTranscript(transcript),
-        tags: buildTags(transcript),
-        transcript,
-      };
-
-      await saveMemory(memory);
-      setMemories((currentMemories) => sortMemoriesByNewest([memory, ...currentMemories]));
-      setProcessingState({ stage: "saved", message: "Saved to your capsule." });
-      toast.success("Saved to your capsule.");
-      return memory;
-    } catch (error) {
-      setProcessingState({ stage: "error", message: error.message || "Something went wrong while processing your memory." });
-      toast.error(error.message || "I couldn't process that recording.");
-      throw error;
-    }
-  }, []);
+    },
+    [],
+  );
 
   const askAssistant = useCallback(
     async (query) => {
@@ -186,7 +219,7 @@ export function useMemoryCapsule() {
   const updatePreference = useCallback((key, value) => {
     setPreferences((currentPreferences) => {
       const nextPreferences = { ...currentPreferences, [key]: value };
-      savePreferences(nextPreferences);
+      savePreferences(nextPreferences).catch(() => undefined);
       return nextPreferences;
     });
   }, []);

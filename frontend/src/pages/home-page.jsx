@@ -1,15 +1,34 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { MemoryCard } from "@/components/ui/memory-card";
 import { VoiceWave } from "@/components/ui/voice-wave";
 import { useRecorder } from "@/hooks/use-recorder";
 
 export default function HomePage({ memories, modelStatus, onProcessRecording, preferences, processingState }) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const shortcutOnceRef = useRef(false);
   const holdTimerRef = useRef(null);
   const holdTriggeredRef = useRef(false);
   const suppressClickRef = useRef(false);
 
   const { amplitude, durationSeconds, error, frequency, isRecording, startRecording, stopRecording } = useRecorder(onProcessRecording);
+
+  useEffect(() => {
+    if (searchParams.get("action") !== "record") {
+      shortcutOnceRef.current = false;
+      return;
+    }
+
+    setSearchParams({}, { replace: true });
+
+    if (shortcutOnceRef.current) {
+      return;
+    }
+
+    shortcutOnceRef.current = true;
+    void startRecording();
+  }, [searchParams, setSearchParams, startRecording]);
 
   const activeEmotion = useMemo(() => {
     if (processingState.stage === "error") {
@@ -64,7 +83,7 @@ export default function HomePage({ memories, modelStatus, onProcessRecording, pr
                 Capture a moment
               </p>
               <p className="mt-2 text-sm leading-relaxed text-[#4A4844]" data-testid="recording-instructions-text">
-                Tap to begin and end a memory. Hold when you only want to catch a quick thought.
+                Keep this screen on while you capture—Memory Capsule works best as an active session. Tap to begin and end a memory, or hold for a quick thought.
               </p>
             </div>
 

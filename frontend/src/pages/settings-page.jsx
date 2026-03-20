@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { captureInstallPrompt, getInstallInstructions, isInstalledPWA, promptInstall } from "@/lib/pwa-install";
+import { isPromptApiAvailable } from "@/lib/prompt-api";
 
 const PREFERENCE_ITEMS = [
   {
@@ -19,16 +21,26 @@ const PREFERENCE_ITEMS = [
     key: "captureReminders",
     title: "Capture reminders",
   },
+  {
+    description: "When supported (Chrome with on-device AI), use the browser’s built-in model for summaries. Otherwise we keep the simple local summary.",
+    key: "useGeminiNano",
+    title: "On-device summaries",
+    requiresPromptApi: true,
+  },
 ];
 
 export default function SettingsPage({ clearAllMemories, memoryCount, preferences, updatePreference }) {
   const [installPrompt, setInstallPrompt] = useState(null);
-  const [isInstalled, setIsInstalled] = useState(window.matchMedia("(display-mode: standalone)").matches);
+  const [isInstalled, setIsInstalled] = useState(isInstalledPWA());
+  const [promptApiReady, setPromptApiReady] = useState(false);
+
+  useEffect(() => {
+    isPromptApiAvailable().then(setPromptApiReady).catch(() => setPromptApiReady(false));
+  }, []);
 
   useEffect(() => {
     const handleBeforeInstall = (event) => {
-      event.preventDefault();
-      setInstallPrompt(event);
+      setInstallPrompt(captureInstallPrompt(event));
     };
 
     const handleInstalled = () => setIsInstalled(true);
@@ -43,14 +55,13 @@ export default function SettingsPage({ clearAllMemories, memoryCount, preference
   }, []);
 
   const capsuleSize = useMemo(() => `${memoryCount} saved ${memoryCount === 1 ? "memory" : "memories"}`, [memoryCount]);
+  const installHelp = useMemo(() => getInstallInstructions(), []);
 
   const handleInstall = async () => {
-    if (!installPrompt) {
-      return;
+    const outcome = await promptInstall(installPrompt);
+    if (outcome === "accepted") {
+      setInstallPrompt(null);
     }
-
-    await installPrompt.prompt();
-    setInstallPrompt(null);
   };
 
   const handleClear = async () => {
@@ -108,6 +119,17 @@ export default function SettingsPage({ clearAllMemories, memoryCount, preference
           >
             {isInstalled ? "Already installed" : installPrompt ? "Install app" : "Available when your browser offers it"}
           </Button>
+
+          {!installPrompt && !isInstalled ? (
+            <div className="rounded-[22px] bg-[#F2EFE9] p-4 text-sm text-[#4A4844]">
+              <p className="editorial-label text-[#1A1918]">Manual install ({installHelp.platform})</p>
+              <ol className="mt-2 list-decimal space-y-1 pl-5">
+                {installHelp.steps.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
@@ -125,16 +147,21 @@ export default function SettingsPage({ clearAllMemories, memoryCount, preference
           <div className="space-y-3" data-testid="preferences-list">
             {PREFERENCE_ITEMS.map((item) => {
               const enabled = preferences[item.key];
+              const disabledByApi = item.requiresPromptApi && !promptApiReady;
 
               return (
                 <div className="flex items-center justify-between gap-3 rounded-[22px] bg-[#F2EFE9] p-4" data-testid={`preference-row-${item.key}`} key={item.key}>
                   <div>
                     <p className="text-base text-[#1A1918]">{item.title}</p>
                     <p className="mt-1 text-sm leading-relaxed text-[#4A4844]">{item.description}</p>
+                    {disabledByApi ? (
+                      <p className="mt-2 text-xs text-[#6F6A62]">Not available in this browser yet. We will use the built-in short summary instead.</p>
+                    ) : null}
                   </div>
                   <button
-                    className={`min-w-[88px] rounded-full px-3 py-2 text-xs font-semibold transition-transform duration-200 ${enabled ? "bg-[#2A2928] text-[#FDFBF7]" : "bg-white text-[#1A1918]"}`}
+                    className={`min-w-[88px] rounded-full px-3 py-2 text-xs font-semibold transition-transform duration-200 ${enabled ? "bg-[#2A2928] text-[#FDFBF7]" : "bg-white text-[#1A1918]"} ${disabledByApi ? "opacity-50" : ""}`}
                     data-testid={`preference-toggle-${item.key}`}
+                    disabled={disabledByApi}
                     onClick={() => updatePreference(item.key, !enabled)}
                     type="button"
                   >

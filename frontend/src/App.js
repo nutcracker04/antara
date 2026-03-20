@@ -16,7 +16,7 @@ const PAGE_COPY = {
   "/": {
     label: "Voice capture",
     title: "A calm space for the memories you speak.",
-    description: "Tap once to begin, hold for a quick thought, and keep every memory easy to revisit.",
+    description: "Keep this open during the moment you are capturing—tap once to begin, hold for a quick thought, and revisit memories anytime.",
   },
   "/memories": {
     label: "Memory library",

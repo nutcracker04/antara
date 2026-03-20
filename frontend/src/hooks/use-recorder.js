@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { WakeLockManager } from "@/lib/wake-lock";
+
 const MIME_TYPES = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+
+const wakeLockManager = new WakeLockManager();
 
 function getSupportedMimeType() {
   return MIME_TYPES.find((mimeType) => MediaRecorder.isTypeSupported(mimeType));
@@ -27,6 +31,7 @@ export function useRecorder(onRecordingComplete) {
   const startTimeRef = useRef(0);
   const streamRef = useRef(null);
   const timerRef = useRef(null);
+  const isRecordingRef = useRef(false);
 
   const cleanupAudioGraph = useCallback(async () => {
     if (animationFrameRef.current) {
@@ -84,6 +89,8 @@ export function useRecorder(onRecordingComplete) {
 
     recorder.stop();
     setIsRecording(false);
+    isRecordingRef.current = false;
+    wakeLockManager.releaseWakeLock().catch(() => undefined);
   }, []);
 
   const startRecording = useCallback(async () => {
@@ -98,6 +105,7 @@ export function useRecorder(onRecordingComplete) {
 
     try {
       setError("");
+      await wakeLockManager.requestWakeLock();
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
 
@@ -154,6 +162,7 @@ export function useRecorder(onRecordingComplete) {
       recorder.start();
       mediaRecorderRef.current = recorder;
       setIsRecording(true);
+      isRecordingRef.current = true;
       setDurationSeconds(0);
       monitorLevels();
 
@@ -161,14 +170,25 @@ export function useRecorder(onRecordingComplete) {
         setDurationSeconds(Math.round((Date.now() - startTimeRef.current) / 1000));
       }, 250);
     } catch (recordingError) {
+      await wakeLockManager.releaseWakeLock();
       await cleanupAudioGraph();
       setError(recordingError.message || "Microphone access was not granted.");
     }
   }, [cleanupAudioGraph, isRecording, monitorLevels, onRecordingComplete]);
 
+  useEffect(() => {
+    const onVisibility = () => {
+      wakeLockManager.handleVisibilityChange(isRecordingRef.current).catch(() => undefined);
+    };
+
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
   useEffect(() => () => {
     stopRecording();
     cleanupAudioGraph();
+    wakeLockManager.releaseWakeLock().catch(() => undefined);
   }, [cleanupAudioGraph, stopRecording]);
 
   return {
