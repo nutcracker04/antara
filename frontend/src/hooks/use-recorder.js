@@ -149,7 +149,25 @@ export function useRecorder(onRecordingComplete) {
         setFrequency(0.2);
         setDurationSeconds(0);
 
-        if (blob.size && onRecordingComplete) {
+        // Validate recording before processing
+        if (!blob.size) {
+          setError("Recording failed - no audio data captured.");
+          return;
+        }
+
+        // Check minimum duration (at least 1 second)
+        if (durationMs < 1000) {
+          setError("Recording too short - please record for at least 1 second.");
+          return;
+        }
+
+        // Check if there was actual audio (not just silence)
+        if (averageAmplitude < 0.01) {
+          setError("No audio detected - please check your microphone and try again.");
+          return;
+        }
+
+        if (onRecordingComplete) {
           await onRecordingComplete({
             averageAmplitude,
             blob,

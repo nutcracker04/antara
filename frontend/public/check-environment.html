@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Environment Check</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .check {
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            border-left: 4px solid #ccc;
+        }
+        .check.pass {
+            background: #e8f5e9;
+            border-color: #4caf50;
+        }
+        .check.fail {
+            background: #ffebee;
+            border-color: #f44336;
+        }
+        .check.warn {
+            background: #fff3e0;
+            border-color: #ff9800;
+        }
+        .check-title {
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+        .check-detail {
+            font-size: 14px;
+            color: #666;
+        }
+        button {
+            background: #2A2928;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #1A1918;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Environment Check</h1>
+        <p>This tool checks if your browser supports all required features for transcription.</p>
+        
+        <button onclick="runChecks()">Run Checks</button>
+        <button onclick="copyResults()">Copy Results</button>
+        
+        <div id="results"></div>
+    </div>
+
+    <script>
+        let resultsText = '';
+
+        function addCheck(title, passed, detail = '') {
+            const resultsDiv = document.getElementById('results');
+            const checkDiv = document.createElement('div');
+            checkDiv.className = `check ${passed ? 'pass' : 'fail'}`;
+            
+            const titleDiv = document.createElement('div');
+            titleDiv.className = 'check-title';
+            titleDiv.textContent = `${passed ? '✅' : '❌'} ${title}`;
+            checkDiv.appendChild(titleDiv);
+            
+            if (detail) {
+                const detailDiv = document.createElement('div');
+                detailDiv.className = 'check-detail';
+                detailDiv.textContent = detail;
+                checkDiv.appendChild(detailDiv);
+            }
+            
+            resultsDiv.appendChild(checkDiv);
+            resultsText += `${passed ? '✅' : '❌'} ${title}\n${detail ? '   ' + detail + '\n' : ''}\n`;
+        }
+
+        function addWarning(title, detail = '') {
+            const resultsDiv = document.getElementById('results');
+            const checkDiv = document.createElement('div');
+            checkDiv.className = 'check warn';
+            
+            const titleDiv = document.createElement('div');
+            titleDiv.className = 'check-title';
+            titleDiv.textContent = `⚠️ ${title}`;
+            checkDiv.appendChild(titleDiv);
+            
+            if (detail) {
+                const detailDiv = document.createElement('div');
+                detailDiv.className = 'check-detail';
+                detailDiv.textContent = detail;
+                checkDiv.appendChild(detailDiv);
+            }
+            
+            resultsDiv.appendChild(checkDiv);
+            resultsText += `⚠️ ${title}\n${detail ? '   ' + detail + '\n' : ''}\n`;
+        }
+
+        async function runChecks() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '';
+            resultsText = '=== Environment Check Results ===\n\n';
+
+            // Browser info
+            const browserInfo = `${navigator.userAgent}`;
+            addCheck('Browser Detected', true, browserInfo);
+
+            // Web Workers
+            const hasWorkers = typeof Worker !== 'undefined';
+            addCheck('Web Workers', hasWorkers, hasWorkers ? 'Supported' : 'Not supported - transcription will not work');
+
+            // MediaRecorder
+            const hasMediaRecorder = typeof MediaRecorder !== 'undefined';
+            addCheck('MediaRecorder API', hasMediaRecorder, hasMediaRecorder ? 'Supported' : 'Not supported - recording will not work');
+
+            // getUserMedia
+            const hasGetUserMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+            addCheck('Microphone Access API', hasGetUserMedia, hasGetUserMedia ? 'Supported' : 'Not supported - cannot access microphone');
+
+            // AudioContext
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            const hasAudioContext = !!AudioContextClass;
+            addCheck('AudioContext', hasAudioContext, hasAudioContext ? 'Supported' : 'Not supported - audio processing will fail');
+
+            // OfflineAudioContext
+            const OfflineContextClass = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+            const hasOfflineContext = !!OfflineContextClass;
+            addCheck('OfflineAudioContext', hasOfflineContext, hasOfflineContext ? 'Supported (needed for resampling)' : 'Not supported - resampling will fail');
+
+            // WebGPU
+            const hasWebGPU = !!navigator.gpu;
+            if (hasWebGPU) {
+                try {
+                    const adapter = await navigator.gpu.requestAdapter();
+                    if (adapter) {
+                        addCheck('WebGPU', true, 'Available - will use faster whisper-base model');
+                    } else {
+                        addWarning('WebGPU', 'API exists but no adapter - will use CPU (whisper-tiny)');
+                    }
+                } catch (e) {
+                    addWarning('WebGPU', 'Error requesting adapter - will use CPU (whisper-tiny)');
+                }
+            } else {
+                addWarning('WebGPU', 'Not available - will use CPU (whisper-tiny, slower but works)');
+            }
+
+            // IndexedDB
+            const hasIndexedDB = !!window.indexedDB;
+            addCheck('IndexedDB', hasIndexedDB, hasIndexedDB ? 'Supported (for model caching)' : 'Not supported - models will redownload');
+
+            // Cache API
+            const hasCacheAPI = 'caches' in window;
+            addCheck('Cache API', hasCacheAPI, hasCacheAPI ? 'Supported' : 'Not supported - may affect performance');
+
+            // Language
+            const language = navigator.language || 'unknown';
+            addCheck('Browser Language', true, `${language} (used as transcription hint)`);
+
+            // MIME type support
+            const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+            const supportedMime = mimeTypes.find(type => MediaRecorder.isTypeSupported(type));
+            addCheck('Audio Recording Format', !!supportedMime, supportedMime || 'No supported format found');
+
+            // Memory
+            if (performance.memory) {
+                const memoryMB = Math.round(performance.memory.jsHeapSizeLimit / 1024 / 1024);
+                addCheck('JavaScript Heap Limit', true, `${memoryMB} MB available`);
+            }
+
+            // Connection
+            if (navigator.connection) {
+                const conn = navigator.connection;
+                const effectiveType = conn.effectiveType || 'unknown';
+                addCheck('Network Connection', true, `${effectiveType} (affects model download speed)`);
+            }
+
+            // Test microphone permission
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                addCheck('Microphone Permission', true, 'Granted');
+                stream.getTracks().forEach(track => track.stop());
+            } catch (error) {
+                addCheck('Microphone Permission', false, `Denied or unavailable: ${error.message}`);
+            }
+
+            // Check for HTTPS
+            const isSecure = window.location.protocol === 'https:' || window.location.hostname === 'localhost';
+            if (!isSecure) {
+                addWarning('HTTPS', 'Not using HTTPS - some features may not work');
+            } else {
+                addCheck('HTTPS', true, 'Secure context');
+            }
+
+            resultsText += '\n=== End of Report ===';
+        }
+
+        function copyResults() {
+            navigator.clipboard.writeText(resultsText).then(() => {
+                alert('Results copied to clipboard!');
+            }).catch(() => {
+                alert('Failed to copy. Please copy manually from the page.');
+            });
+        }
+
+        // Run checks on load
+        window.addEventListener('load', runChecks);
+    </script>
+</body>
+</html>
