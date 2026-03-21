@@ -11,7 +11,8 @@ const MODELS = {
 
 let embedderPromise;
 let transcriberPromise;
-let transcriberConfigKey = "";
+let transcriberPreferredKey = "";
+let transcriberResolvedOptions = null;
 
 function postStatus(label, stage) {
   self.postMessage({
@@ -49,23 +50,56 @@ async function resolveTranscriberOptions() {
   return { device, dtype, modelName };
 }
 
-async function getTranscriber() {
-  const options = await resolveTranscriberOptions();
-  const nextKey = `${options.modelName}|${options.device}|${options.dtype}`;
+function loadTranscriberPipeline(options) {
+  return pipeline("automatic-speech-recognition", options.modelName, {
+    dtype: options.dtype,
+    device: options.device,
+    progress_callback: () => {
+      postStatus("Transcription model is loading locally…", "loading-transcriber");
+    },
+  });
+}
 
-  if (!transcriberPromise || transcriberConfigKey !== nextKey) {
-    transcriberConfigKey = nextKey;
+async function getTranscriber() {
+  const preferred = await resolveTranscriberOptions();
+  const preferredKey = `${preferred.modelName}|${preferred.device}|${preferred.dtype}`;
+
+  if (!transcriberPromise || transcriberPreferredKey !== preferredKey) {
+    transcriberPreferredKey = preferredKey;
     postStatus("Loading the on-device transcription model…", "loading-transcriber");
-    transcriberPromise = pipeline("automatic-speech-recognition", options.modelName, {
-      dtype: options.dtype,
-      device: options.device,
-      progress_callback: () => {
-        postStatus("Transcription model is loading locally…", "loading-transcriber");
-      },
-    });
+    transcriberPromise = loadTranscriberPipeline(preferred)
+      .then((transcriber) => {
+        transcriberResolvedOptions = preferred;
+        return transcriber;
+      })
+      .catch(async (error) => {
+        if (preferred.device === "webgpu") {
+          postStatus("Falling back to CPU transcription…", "loading-transcriber");
+          const fallback = {
+            device: "wasm",
+            dtype: "q8",
+            modelName: MODELS.transcriberTiny,
+          };
+          try {
+            const transcriber = await loadTranscriberPipeline(fallback);
+            transcriberResolvedOptions = fallback;
+            return transcriber;
+          } catch (fallbackError) {
+            transcriberPreferredKey = "";
+            transcriberPromise = undefined;
+            transcriberResolvedOptions = null;
+            throw fallbackError;
+          }
+        }
+        transcriberPreferredKey = "";
+        transcriberPromise = undefined;
+        transcriberResolvedOptions = null;
+        throw error;
+      });
   }
 
-  return { transcriber: await transcriberPromise, options };
+  const transcriber = await transcriberPromise;
+  return { transcriber, options: transcriberResolvedOptions || preferred };
 }
 
 async function getEmbedder() {
@@ -108,10 +142,17 @@ self.onmessage = async (event) => {
         postProgress(id, progressValue, "transcribing");
       }, 450);
 
+      const rawLang =
+        typeof payload.language === "string" && payload.language.trim().length > 0
+          ? payload.language.trim().split("-")[0]
+          : "en";
+
       const asrOptions = {
         chunk_length_s: 20,
         return_timestamps: false,
         stride_length_s: 4,
+        language: rawLang,
+        task: "transcribe",
       };
 
       let result;

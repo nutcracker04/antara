@@ -92,8 +92,9 @@ export function warmupLocalModels() {
   return sendMessage("WARMUP");
 }
 
-export async function transcribeAudio(audioData) {
-  const response = await sendMessage("TRANSCRIBE", { audioData });
+export async function transcribeAudio(audioData, options = {}) {
+  const { language } = options;
+  const response = await sendMessage("TRANSCRIBE", { audioData, language });
   return {
     text: response.text || "",
     transcriptionModel: response.transcriptionModel || "whisper-tiny|wasm|q8",

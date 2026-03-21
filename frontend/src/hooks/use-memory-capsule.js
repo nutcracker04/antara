@@ -52,6 +52,55 @@ function createId() {
   return globalThis.crypto?.randomUUID?.() || `memory-${Date.now()}`;
 }
 
+/** Whisper ISO 639-1 hint from the browser (e.g. en-US → en). */
+function getTranscriptionLanguageHint() {
+  if (typeof navigator === "undefined" || !navigator.language) {
+    return "en";
+  }
+  return navigator.language.trim().split("-")[0] || "en";
+}
+
+/** Whisper / transformers.js ASR expects PCM at this rate (see prepareAudios in @huggingface/transformers). */
+const WHISPER_SAMPLE_RATE = 16000;
+
+function mixToMonoFloat32(audioBuffer) {
+  const monoSamples = new Float32Array(audioBuffer.length);
+
+  for (let channel = 0; channel < audioBuffer.numberOfChannels; channel += 1) {
+    const channelData = audioBuffer.getChannelData(channel);
+    for (let index = 0; index < channelData.length; index += 1) {
+      monoSamples[index] += channelData[index] / audioBuffer.numberOfChannels;
+    }
+  }
+
+  return monoSamples;
+}
+
+async function resampleMonoToWhisperRate(monoSamples, sourceSampleRate, durationSeconds) {
+  if (sourceSampleRate === WHISPER_SAMPLE_RATE) {
+    return monoSamples;
+  }
+
+  const OfflineContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+
+  if (!OfflineContext) {
+    throw new Error("This browser cannot resample audio for transcription.");
+  }
+
+  const frameCount = Math.max(1, Math.ceil(durationSeconds * WHISPER_SAMPLE_RATE));
+  const offline = new OfflineContext(1, frameCount, WHISPER_SAMPLE_RATE);
+  const srcBuffer = offline.createBuffer(1, monoSamples.length, sourceSampleRate);
+  srcBuffer.copyToChannel(monoSamples, 0);
+
+  const source = offline.createBufferSource();
+  source.buffer = srcBuffer;
+  source.connect(offline.destination);
+  source.start(0);
+
+  const rendered = await offline.startRendering();
+  return new Float32Array(rendered.getChannelData(0));
+}
+
 async function decodeAudioBlob(blob) {
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
 
@@ -64,16 +113,8 @@ async function decodeAudioBlob(blob) {
   try {
     const arrayBuffer = await blob.arrayBuffer();
     const audioBuffer = await context.decodeAudioData(arrayBuffer);
-    const monoSamples = new Float32Array(audioBuffer.length);
-
-    for (let channel = 0; channel < audioBuffer.numberOfChannels; channel += 1) {
-      const channelData = audioBuffer.getChannelData(channel);
-      for (let index = 0; index < channelData.length; index += 1) {
-        monoSamples[index] += channelData[index] / audioBuffer.numberOfChannels;
-      }
-    }
-
-    return monoSamples;
+    const monoSamples = mixToMonoFloat32(audioBuffer);
+    return resampleMonoToWhisperRate(monoSamples, audioBuffer.sampleRate, audioBuffer.duration);
   } finally {
     await context.close();
   }
@@ -137,7 +178,9 @@ export function useMemoryCapsule() {
         const decodedAudio = await decodeAudioBlob(blob);
 
         setProcessingState({ stage: "transcribing", message: "Turning your words into text…" });
-        const { text: transcriptRaw, transcriptionModel } = await transcribeAudio(decodedAudio);
+        const { text: transcriptRaw, transcriptionModel } = await transcribeAudio(decodedAudio, {
+          language: getTranscriptionLanguageHint(),
+        });
         const transcript = normalizeTranscript(transcriptRaw);
         const transcriptionDuration = Math.round(performance.now() - transcriptionStartedAt);
 
