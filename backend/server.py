@@ -8,6 +8,7 @@ from typing import List, Literal
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI
+from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.cors import CORSMiddleware
@@ -61,6 +62,11 @@ class AppInfo(BaseModel):
     payments_enabled: bool = False
     storage: str = "IndexedDB on-device"
 
+
+class GenerateRequest(BaseModel):
+    query: str
+    context: str
+
 # Add your routes to the router instead of directly to app
 @api_router.get("/", response_model=AppInfo)
 async def root():
@@ -94,6 +100,55 @@ async def get_status_checks():
             check['timestamp'] = datetime.fromisoformat(check['timestamp'])
     
     return status_checks
+
+
+@api_router.post("/generate")
+async def generate_with_claude(request: GenerateRequest):
+    """
+    Generate an answer using Claude API with streaming response
+    """
+    anthropic_api_key = os.environ.get('ANTHROPIC_API_KEY')
+    
+    if not anthropic_api_key:
+        logger.warning("ANTHROPIC_API_KEY not configured")
+        return {"error": "Claude API not configured"}
+    
+    try:
+        import anthropic
+        
+        client = anthropic.Anthropic(api_key=anthropic_api_key)
+        
+        prompt = f"""Based on these memories:
+
+{request.context}
+
+Answer this question: {request.query}
+
+Provide a natural, conversational answer that synthesizes information from the memories. Keep it concise (2-3 sentences).
+
+Answer:"""
+        
+        async def stream_response():
+            with client.messages.stream(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=300,
+                temperature=0.7,
+                messages=[{
+                    "role": "user",
+                    "content": prompt
+                }]
+            ) as stream:
+                for text in stream.text_stream:
+                    yield text
+        
+        return StreamingResponse(stream_response(), media_type="text/plain")
+        
+    except ImportError:
+        logger.error("anthropic package not installed")
+        return {"error": "Claude API client not available"}
+    except Exception as e:
+        logger.error(f"Claude API error: {e}")
+        return {"error": str(e)}
 
 # Include the router in the main app
 app.include_router(api_router)

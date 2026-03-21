@@ -9,7 +9,6 @@ import {
   detectEmotion,
   sortMemoriesByNewest,
   summarizeTranscript,
-  vectorSearch,
 } from "@/lib/memory-utils";
 import { DEFAULT_PREFERENCES } from "@/lib/preferences-defaults";
 import { loadPreferences, savePreferences } from "@/lib/preferences";
@@ -60,128 +59,6 @@ function getTranscriptionLanguageHint() {
   return navigator.language.trim().split("-")[0] || "en";
 }
 
-/** Whisper / transformers.js ASR expects PCM at this rate (see prepareAudios in @huggingface/transformers). */
-const WHISPER_SAMPLE_RATE = 16000;
-
-function mixToMonoFloat32(audioBuffer) {
-  const length = audioBuffer.length;
-  const numChannels = audioBuffer.numberOfChannels;
-  const monoSamples = new Float32Array(length);
-
-  if (numChannels === 1) {
-    // Already mono, just copy
-    monoSamples.set(audioBuffer.getChannelData(0));
-    return monoSamples;
-  }
-
-  // Mix multiple channels to mono
-  const divisor = 1 / numChannels;
-  for (let channel = 0; channel < numChannels; channel += 1) {
-    const channelData = audioBuffer.getChannelData(channel);
-    for (let i = 0; i < length; i += 1) {
-      monoSamples[i] += channelData[i] * divisor;
-    }
-  }
-
-  return monoSamples;
-}
-
-async function resampleMonoToWhisperRate(monoSamples, sourceSampleRate, durationSeconds) {
-  if (sourceSampleRate === WHISPER_SAMPLE_RATE) {
-    return monoSamples;
-  }
-
-  const OfflineContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-
-  if (!OfflineContext) {
-    throw new Error("This browser cannot resample audio for transcription.");
-  }
-
-  const frameCount = Math.max(1, Math.ceil(durationSeconds * WHISPER_SAMPLE_RATE));
-  const offline = new OfflineContext(1, frameCount, WHISPER_SAMPLE_RATE);
-  const srcBuffer = offline.createBuffer(1, monoSamples.length, sourceSampleRate);
-  srcBuffer.copyToChannel(monoSamples, 0);
-
-  const source = offline.createBufferSource();
-  source.buffer = srcBuffer;
-  source.connect(offline.destination);
-  source.start(0);
-
-  const rendered = await offline.startRendering();
-  return new Float32Array(rendered.getChannelData(0));
-}
-
-async function decodeAudioBlob(blob) {
-  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-
-  if (!AudioContextClass) {
-    throw new Error("This browser cannot decode recorded audio.");
-  }
-
-  const context = new AudioContextClass();
-
-  try {
-    const arrayBuffer = await blob.arrayBuffer();
-    
-    // Validate array buffer
-    if (!arrayBuffer || arrayBuffer.byteLength === 0) {
-      throw new Error("Audio file is empty or corrupted.");
-    }
-
-    console.log(`[Audio Debug] Decoding audio: ${arrayBuffer.byteLength} bytes, type: ${blob.type}`);
-    
-    const audioBuffer = await context.decodeAudioData(arrayBuffer);
-    
-    console.log(`[Audio Debug] Decoded: ${audioBuffer.duration.toFixed(2)}s, ${audioBuffer.sampleRate}Hz, ${audioBuffer.numberOfChannels} channels`);
-    
-    // Validate decoded audio
-    if (audioBuffer.duration < 0.5) {
-      throw new Error("Audio recording is too short (less than 0.5 seconds).");
-    }
-
-    const monoSamples = mixToMonoFloat32(audioBuffer);
-    
-    // Check if audio is not just silence - optimized to avoid creating large arrays
-    let maxAmplitude = 0;
-    const checkInterval = Math.max(1, Math.floor(monoSamples.length / 1000)); // Sample every Nth value
-    for (let i = 0; i < monoSamples.length; i += checkInterval) {
-      const abs = Math.abs(monoSamples[i]);
-      if (abs > maxAmplitude) {
-        maxAmplitude = abs;
-      }
-    }
-    
-    console.log(`[Audio Debug] Max amplitude: ${maxAmplitude.toFixed(4)}`);
-    
-    if (maxAmplitude < 0.001) {
-      throw new Error("No audio signal detected - microphone may not be working.");
-    }
-    
-    const resampled = await resampleMonoToWhisperRate(monoSamples, audioBuffer.sampleRate, audioBuffer.duration);
-    
-    console.log(`[Audio Debug] Resampled to ${WHISPER_SAMPLE_RATE}Hz: ${resampled.length} samples`);
-    
-    // Verify resampled audio quality
-    let resampledMax = 0;
-    for (let i = 0; i < resampled.length; i += 100) {
-      const abs = Math.abs(resampled[i]);
-      if (abs > resampledMax) resampledMax = abs;
-    }
-    console.log(`[Audio Debug] Resampled max amplitude: ${resampledMax.toFixed(4)}`);
-    
-    if (resampledMax < 0.001) {
-      throw new Error("Audio lost during resampling - this is a bug, please report it.");
-    }
-    
-    return resampled;
-  } catch (error) {
-    console.error("[Audio Debug] Decoding failed:", error);
-    throw error;
-  } finally {
-    await context.close();
-  }
-}
-
 function normalizeTranscript(text) {
   return text.replace(/\s+/g, " ").trim();
 }
@@ -202,6 +79,44 @@ export function useMemoryCapsule() {
         if (active) {
           setMemories(storedMemories);
           setPreferences(prefs);
+          
+          // Lazy re-embedding for migrated memories
+          const needsReembed = storedMemories.filter(m => m.embeddingModel === "pending-reembed");
+          if (needsReembed.length > 0) {
+            console.log(`[Migration] Found ${needsReembed.length} memories needing re-embedding`);
+            
+            // Re-embed one at a time when idle
+            const reembedOne = async (memory) => {
+              try {
+                const embedding = await embedText(memory.transcript || memory.summary);
+                const updated = { ...memory, embedding, embeddingModel: "bge-small-en-v1.5" };
+                await saveMemory(updated);
+                
+                // Update local state
+                setMemories(current => 
+                  current.map(m => m.id === memory.id ? updated : m)
+                );
+                
+                console.log(`[Migration] Re-embedded memory ${memory.id}`);
+              } catch (error) {
+                console.warn(`[Migration] Failed to re-embed ${memory.id}:`, error);
+              }
+            };
+            
+            // Process one memory at a time with delays
+            const processQueue = async (queue) => {
+              if (!active || queue.length === 0) return;
+              
+              const memory = queue.shift();
+              await reembedOne(memory);
+              
+              // Wait 2 seconds before next one
+              setTimeout(() => processQueue(queue), 2000);
+            };
+            
+            // Start processing after a delay
+            setTimeout(() => processQueue([...needsReembed]), 3000);
+          }
         }
       } catch (error) {
         toast.error("I couldn't load your saved memories.");
@@ -221,6 +136,8 @@ export function useMemoryCapsule() {
     });
 
     const warmupTimer = window.setTimeout(() => {
+      // Warmup models before recording starts
+      // This ensures VAD's Silero ONNX model is loaded before first use
       warmupLocalModels().catch(() => undefined);
     }, 1200);
 
@@ -232,19 +149,20 @@ export function useMemoryCapsule() {
   }, []);
 
   const processRecording = useCallback(
-    async ({ averageAmplitude, blob, durationMs, frequency }) => {
+    async ({ audioData, averageAmplitude, durationMs, frequency, speechDurationMs, segmentCount }) => {
       const transcriptionStartedAt = performance.now();
 
       try {
-        console.log(`[Processing] Starting - Duration: ${durationMs}ms, Amplitude: ${averageAmplitude.toFixed(4)}, Blob size: ${blob.size} bytes`);
+        console.log(
+          `[Processing] Starting - Total: ${durationMs}ms, Speech: ${speechDurationMs}ms, ` +
+          `Segments: ${segmentCount}, Amplitude: ${averageAmplitude.toFixed(4)}`
+        );
         
-        setProcessingState({ stage: "preparing", message: "Getting your memory ready…" });
-        const decodedAudio = await decodeAudioBlob(blob);
-
-        console.log(`[Processing] Audio decoded successfully, ${decodedAudio.length} samples`);
-
         setProcessingState({ stage: "transcribing", message: "Turning your words into text…" });
-        const { text: transcriptRaw, transcriptionModel } = await transcribeAudio(decodedAudio, {
+        
+        // Audio is already in the correct format (Float32Array at 16kHz) from VAD!
+        // No need to decode or resample
+        const { text: transcriptRaw, transcriptionModel } = await transcribeAudio(audioData, {
           language: getTranscriptionLanguageHint(),
         });
         
@@ -282,10 +200,12 @@ export function useMemoryCapsule() {
 
         const memory = {
           id: createId(),
-          audioBlob: blob,
+          audioData: null, // VAD doesn't produce a blob, we could reconstruct if needed
           averageAmplitude,
           createdAt: new Date().toISOString(),
           durationMs,
+          speechDurationMs,
+          segmentCount,
           embedding,
           emotion: detectEmotion(transcript, averageAmplitude),
           frequency,
@@ -295,7 +215,7 @@ export function useMemoryCapsule() {
           transcript,
           transcriptionDuration,
           transcriptionModel,
-          version: 2,
+          version: 3, // Bumped version for VAD-based recordings
         };
 
         await saveMemory(memory);
@@ -327,8 +247,7 @@ export function useMemoryCapsule() {
       }
 
       const queryEmbedding = await embedText(query);
-      const matches = vectorSearch(queryEmbedding, memories, 5);
-      return buildAssistantResponse(query, matches, memories);
+      return buildAssistantResponse(query, queryEmbedding, memories);
     },
     [memories],
   );

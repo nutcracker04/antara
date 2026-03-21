@@ -14,6 +14,23 @@ class MemoryCapsuleDB extends Dexie {
       memories: "id, createdAt, emotion, *tags, durationMs",
       preferences: "key",
     });
+    // Version 2: Add embeddingModel field for migration tracking
+    this.version(2).stores({
+      memories: "id, createdAt, emotion, *tags, durationMs, embeddingModel",
+      preferences: "key",
+    }).upgrade(async (tx) => {
+      // Mark all existing memories as needing re-embedding
+      const memories = await tx.table("memories").toArray();
+      console.log(`[Migration] Marking ${memories.length} memories for re-embedding`);
+      
+      for (const memory of memories) {
+        if (!memory.embeddingModel || memory.embeddingModel === "all-MiniLM-L6-v2") {
+          await tx.table("memories").update(memory.id, {
+            embeddingModel: "needs-migration",
+          });
+        }
+      }
+    });
   }
 }
 
@@ -23,7 +40,61 @@ async function openDatabase() {
   const db = new MemoryCapsuleDB();
   await migrateLegacyMemoriesIfNeeded(db);
   await migrateLocalStoragePreferencesOnce(db);
+  await migrateEmbeddingsInBackground(db);
   return db;
+}
+
+/**
+ * Re-embed memories that were created with the old model
+ * Runs lazily in the background using requestIdleCallback
+ */
+async function migrateEmbeddingsInBackground(db) {
+  try {
+    const stale = await db.memories
+      .where("embeddingModel")
+      .equals("needs-migration")
+      .toArray();
+
+    if (stale.length === 0) {
+      return;
+    }
+
+    console.log(`[Migration] Re-embedding ${stale.length} memories`);
+
+    // Process in batches of 3 during idle time
+    const processBatch = async (batch) => {
+      for (const memory of batch) {
+        // Wipe the stale embedding — hybridSearch will skip it (filter checks array length)
+        // BM25 still works. Vector search skips until re-embedded.
+        await db.memories.update(memory.id, {
+          embedding: null,
+          embeddingModel: "pending-reembed",
+        });
+      }
+    };
+
+    // Use requestIdleCallback so this doesn't block app startup
+    const runWhenIdle = (memories) => {
+      if (!memories.length) return;
+      const batch = memories.splice(0, 3);
+      if (typeof requestIdleCallback !== "undefined") {
+        requestIdleCallback(async () => {
+          await processBatch(batch);
+          runWhenIdle(memories);
+        }, { timeout: 5000 });
+      } else {
+        // Fallback for browsers without requestIdleCallback
+        setTimeout(async () => {
+          await processBatch(batch);
+          runWhenIdle(memories);
+        }, 100);
+      }
+    };
+
+    runWhenIdle([...stale]);
+  } catch (error) {
+    console.error("[Migration] Embedding migration failed:", error);
+  }
 }
 
 export async function initMemoryDb() {
@@ -87,6 +158,7 @@ function upgradeMemoryRecord(memory) {
     summarySource: memory.summarySource || "rule-based",
     transcriptionDuration: memory.transcriptionDuration ?? 0,
     transcriptionModel: memory.transcriptionModel || "whisper-tiny",
+    embeddingModel: memory.embeddingModel || "needs-migration",
     version: memory.version ?? 2,
   };
 }

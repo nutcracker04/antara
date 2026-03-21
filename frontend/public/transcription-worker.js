@@ -1,44 +1,53 @@
 import { env, pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/+esm";
 
+// All processing is 100% local - models download once, cache forever
+env.allowLocalModels = false;
 env.allowRemoteModels = true;
 env.useBrowserCache = true;
 
-const MODELS = {
-  embedder: "Xenova/all-MiniLM-L6-v2",
-  transcriberTiny: "Xenova/whisper-tiny",
-  transcriberBase: "Xenova/whisper-base",
-};
+// Two-tier model selection:
+// - WebGPU: whisper-large-v3-turbo (high quality, ~800MB)
+// - WASM: distil-whisper-base.en (~80MB, fast on mobile)
+const WEBGPU_MODEL = "onnx-community/whisper-large-v3-turbo";
+const WASM_MODEL = "Xenova/distil-whisper-base.en";
 
-let embedderPromise;
 let transcriberPromise;
 let transcriberPreferredKey = "";
 let transcriberResolvedOptions = null;
 
 function postStatus(label, stage) {
-  self.postMessage({
-    type: "status",
-    payload: { label, stage },
-  });
+  self.postMessage({ type: "status", payload: { label, stage } });
 }
 
 function postProgress(id, percent, stage = "transcribing") {
-  self.postMessage({
-    id,
-    type: "progress",
-    payload: { percent, stage },
-  });
+  self.postMessage({ id, type: "progress", payload: { percent, stage } });
+}
+
+async function isWebGPUReliable() {
+  if (!navigator.gpu) return false;
+  try {
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) return false;
+    const info = await adapter.requestAdapterInfo();
+    // Skip on known problematic mobile GPU vendors
+    const isMobile = /android/i.test(navigator.userAgent);
+    if (isMobile && !info.vendor) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function resolveTranscriberOptions() {
-  // Force CPU/WASM for now - WebGPU has issues with some audio formats
-  // TODO: Re-enable WebGPU once Transformers.js fixes the >> >> >> bug
-  const device = "wasm";
-  const dtype = "q8";
-  const modelName = MODELS.transcriberTiny;
+  const isWebGPUAvailable = await isWebGPUReliable();
+  
+  if (isWebGPUAvailable) {
+    console.log(`[Transcriber] Using ${WEBGPU_MODEL} with webgpu/fp16`);
+    return { device: "webgpu", dtype: "fp16", modelName: WEBGPU_MODEL };
+  }
 
-  console.log(`[Transcriber] Using ${modelName} with ${device}/${dtype}`);
-
-  return { device, dtype, modelName };
+  console.log(`[Transcriber] Using ${WASM_MODEL} with wasm/q8 (fallback)`);
+  return { device: "wasm", dtype: "q8", modelName: WASM_MODEL };
 }
 
 function loadTranscriberPipeline(options) {
@@ -66,11 +75,7 @@ async function getTranscriber() {
       .catch(async (error) => {
         if (preferred.device === "webgpu") {
           postStatus("Falling back to CPU transcription…", "loading-transcriber");
-          const fallback = {
-            device: "wasm",
-            dtype: "q8",
-            modelName: MODELS.transcriberTiny,
-          };
+          const fallback = { device: "wasm", dtype: "q8", modelName: WASM_MODEL };
           try {
             const transcriber = await loadTranscriberPipeline(fallback);
             transcriberResolvedOptions = fallback;
@@ -93,56 +98,41 @@ async function getTranscriber() {
   return { transcriber, options: transcriberResolvedOptions || preferred };
 }
 
-async function getEmbedder() {
-  if (!embedderPromise) {
-    postStatus("Loading the local search model…", "loading-embedder");
-    embedderPromise = pipeline("feature-extraction", MODELS.embedder, {
-      dtype: "q8",
-      progress_callback: () => {
-        postStatus("Search model is loading locally…", "loading-embedder");
-      },
-    });
-  }
-
-  return embedderPromise;
-}
-
 self.onmessage = async (event) => {
   const { id, payload, type } = event.data;
 
   try {
     if (type === "WARMUP") {
-      await Promise.all([getTranscriber(), getEmbedder()]);
+      await getTranscriber();
       self.postMessage({ id, type: "success", payload: { ok: true } });
-      postStatus("Local models are ready.", "ready");
+      postStatus("Transcription model ready.", "ready");
       return;
     }
+
+
 
     if (type === "TRANSCRIBE") {
       const { transcriber, options } = await getTranscriber();
       postStatus("Transcribing on this device…", "transcribing");
 
-      const audioData = payload.audioData instanceof Float32Array ? payload.audioData : new Float32Array(payload.audioData || []);
+      const audioData = payload.audioData instanceof Float32Array 
+        ? payload.audioData 
+        : new Float32Array(payload.audioData || []);
 
-      // Validate audio data
       if (!audioData || audioData.length === 0) {
         throw new Error("No audio data received for transcription");
       }
 
-      // Check for minimum audio length (at least 0.5 seconds at 16kHz)
-      const minSamples = 8000; // 0.5 seconds at 16kHz
+      const minSamples = 8000;
       if (audioData.length < minSamples) {
         throw new Error("Audio too short - please record for at least 1 second");
       }
 
-      // Check if audio is not just silence - optimized version
       let maxAmplitude = 0;
       const checkInterval = Math.max(1, Math.floor(audioData.length / 1000));
       for (let i = 0; i < audioData.length; i += checkInterval) {
         const abs = Math.abs(audioData[i]);
-        if (abs > maxAmplitude) {
-          maxAmplitude = abs;
-        }
+        if (abs > maxAmplitude) maxAmplitude = abs;
       }
       
       if (maxAmplitude < 0.001) {
@@ -151,40 +141,51 @@ self.onmessage = async (event) => {
 
       postProgress(id, 4, "transcribing");
 
-      let progressTimer;
       let progressValue = 4;
-      progressTimer = setInterval(() => {
+      const progressTimer = setInterval(() => {
         progressValue = Math.min(progressValue + 6, 88);
         postProgress(id, progressValue, "transcribing");
       }, 450);
 
-      const rawLang =
-        typeof payload.language === "string" && payload.language.trim().length > 0
-          ? payload.language.trim().split("-")[0]
-          : "en";
+      const rawLang = typeof payload.language === "string" && payload.language.trim().length > 0
+        ? payload.language.trim().split("-")[0]
+        : "en";
 
-      // Log audio stats for debugging
-      console.log(`[Whisper] Processing ${audioData.length} samples (${(audioData.length / 16000).toFixed(2)}s at 16kHz)`);
-      console.log(`[Whisper] Max amplitude: ${maxAmplitude.toFixed(4)}, Language: ${rawLang}`);
+      console.log(`[Whisper] Processing ${audioData.length} samples (${(audioData.length / 16000).toFixed(2)}s)`);
+      
+      // Calculate audio stats without spreading the array
+      let minVal = audioData[0];
+      let maxVal = audioData[0];
+      let sum = 0;
+      let nonZeroCount = 0;
+      for (let i = 0; i < audioData.length; i++) {
+        const val = audioData[i];
+        if (val < minVal) minVal = val;
+        if (val > maxVal) maxVal = val;
+        sum += val;
+        if (Math.abs(val) > 0.001) nonZeroCount++;
+      }
+      const mean = sum / audioData.length;
+      const nonZeroPercent = (nonZeroCount / audioData.length * 100).toFixed(1);
+      console.log(`[Whisper] Audio stats - min: ${minVal.toFixed(4)}, max: ${maxVal.toFixed(4)}, mean: ${mean.toFixed(4)}, non-zero: ${nonZeroPercent}%`);
 
       const asrOptions = {
         chunk_length_s: 30,
-        return_timestamps: false,
         stride_length_s: 5,
-        language: rawLang,
-        task: "transcribe",
-        // Add these to potentially improve accuracy
+        // Don't specify language or task for English-only models
+        return_timestamps: true,
+        force_full_sequences: false,
         condition_on_previous_text: false,
+        // Anti-hallucination thresholds
         compression_ratio_threshold: 2.4,
-        logprob_threshold: -1.0,
+        logprob_threshold: -1.0,  
         no_speech_threshold: 0.6,
       };
 
       let result;
       try {
-        console.log(`[Whisper] Starting transcription with model: ${options.modelName}`);
         result = await transcriber(audioData, asrOptions);
-        console.log(`[Whisper] Raw result:`, result);
+        console.log(`[Whisper] Result:`, result);
       } finally {
         clearInterval(progressTimer);
       }
@@ -192,26 +193,26 @@ self.onmessage = async (event) => {
       postProgress(id, 100, "transcribing");
 
       const text = typeof result === "string" ? result : result?.text || "";
+      const chunks = result?.chunks || null;
 
-      // Validate transcription result
       if (!text || text.trim().length === 0) {
         throw new Error("No speech detected in the recording");
       }
 
-      // Check for common Whisper hallucinations
+      // Filter common Whisper hallucinations
       const hallucinations = [
         "Thank you for watching",
-        "Thanks for watching", 
+        "Thanks for watching",
         "Subscribe",
         "Please subscribe",
         "Subtitles by",
         "Amara.org",
         "www.mooji.org"
       ];
-      
+
       const lowerText = text.toLowerCase();
       const isHallucination = hallucinations.some(phrase => lowerText.includes(phrase.toLowerCase()));
-      
+
       if (isHallucination && text.length < 100) {
         throw new Error("Could not detect clear speech - please try recording again");
       }
@@ -222,24 +223,14 @@ self.onmessage = async (event) => {
         type: "success",
         payload: {
           text,
+          chunks,
           transcriptionModel: `${options.modelName}|${options.device}|${options.dtype}`,
         },
       });
       return;
     }
-
-    if (type === "EMBED") {
-      const embedder = await getEmbedder();
-      postStatus("Building a local search vector…", "embedding");
-
-      const output = await embedder(payload.text, { normalize: true, pooling: "mean" });
-      const embedding = Array.from(output.data || []);
-
-      postStatus("Local models are ready.", "ready");
-      self.postMessage({ id, type: "success", payload: { embedding } });
-    }
   } catch (error) {
-    postStatus("The local AI worker hit an error.", "error");
-    self.postMessage({ id, type: "error", error: error.message || "Local AI worker failed." });
+    postStatus("The transcription worker hit an error.", "error");
+    self.postMessage({ id, type: "error", error: error.message || "Transcription failed." });
   }
 };

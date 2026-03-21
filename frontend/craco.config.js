@@ -37,6 +37,20 @@ let webpackConfig = {
       '@': path.resolve(__dirname, 'src'),
     },
     configure: (webpackConfig) => {
+      // Suppress harmless warnings from third-party libraries
+      if (!webpackConfig.ignoreWarnings) {
+        webpackConfig.ignoreWarnings = [];
+      }
+      webpackConfig.ignoreWarnings.push(
+        function (warning) {
+          return (
+            warning.message &&
+            (warning.message.includes('@ricky0123/vad-web') ||
+             warning.message.includes('onnxruntime-web'))
+          );
+        }
+      );
+
       if (process.env.NODE_ENV === "production") {
         const { GenerateSW } = require("workbox-webpack-plugin");
         const publicUrl = process.env.PUBLIC_URL || "";
@@ -77,7 +91,8 @@ let webpackConfig = {
                 urlPattern: ({ request, url }) =>
                   request.method === "GET" &&
                   self.location.origin === url.origin &&
-                  (url.pathname === "/ai-worker.js" ||
+                  (url.pathname === "/transcription-worker.js" ||
+                    url.pathname === "/embedding-worker.js" ||
                     url.pathname === "/manifest.json" ||
                     url.pathname.endsWith(".png") ||
                     url.pathname.endsWith(".svg")),

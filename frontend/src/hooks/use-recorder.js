@@ -1,14 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { WakeLockManager } from "@/lib/wake-lock";
-
-const MIME_TYPES = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+import { VADManager } from "@/lib/vad-manager";
 
 const wakeLockManager = new WakeLockManager();
-
-function getSupportedMimeType() {
-  return MIME_TYPES.find((mimeType) => MediaRecorder.isTypeSupported(mimeType));
-}
 
 function average(values) {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
@@ -21,42 +16,17 @@ export function useRecorder(onRecordingComplete) {
   const [frequency, setFrequency] = useState(0.2);
   const [isRecording, setIsRecording] = useState(false);
 
+  const vadManagerRef = useRef(null);
   const analyserRef = useRef(null);
   const animationFrameRef = useRef(null);
   const audioContextRef = useRef(null);
-  const chunksRef = useRef([]);
-  const mediaRecorderRef = useRef(null);
   const samplesRef = useRef({ amplitudes: [], frequencies: [] });
   const sourceRef = useRef(null);
   const startTimeRef = useRef(0);
   const streamRef = useRef(null);
   const timerRef = useRef(null);
   const isRecordingRef = useRef(false);
-
-  const cleanupAudioGraph = useCallback(async () => {
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-    }
-
-    if (timerRef.current) {
-      window.clearInterval(timerRef.current);
-    }
-
-    sourceRef.current?.disconnect();
-    analyserRef.current?.disconnect();
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-
-    if (audioContextRef.current && audioContextRef.current.state !== "closed") {
-      await audioContextRef.current.close();
-    }
-
-    analyserRef.current = null;
-    animationFrameRef.current = null;
-    audioContextRef.current = null;
-    sourceRef.current = null;
-    streamRef.current = null;
-    timerRef.current = null;
-  }, []);
+  const speechSegmentsRef = useRef([]);
 
   const monitorLevels = useCallback(() => {
     if (!analyserRef.current) {
@@ -81,31 +51,126 @@ export function useRecorder(onRecordingComplete) {
     animationFrameRef.current = requestAnimationFrame(monitorLevels);
   }, []);
 
-  const stopRecording = useCallback(() => {
-    const recorder = mediaRecorderRef.current;
-    if (!recorder || recorder.state === "inactive") {
+  const stopRecording = useCallback(async () => {
+    if (!isRecordingRef.current) {
       return;
     }
 
-    recorder.stop();
+    // Stop VAD and get all captured segments
+    const vadResult = await vadManagerRef.current?.stop();
+    
     setIsRecording(false);
     isRecordingRef.current = false;
     wakeLockManager.releaseWakeLock().catch(() => undefined);
-  }, []);
+
+    // Clean up audio analysis
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
+    if (timerRef.current) {
+      window.clearInterval(timerRef.current);
+    }
+
+    sourceRef.current?.disconnect();
+    analyserRef.current?.disconnect();
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+
+    if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+      audioContextRef.current.close().catch(() => undefined);
+    }
+
+    // Calculate stats
+    const durationMs = Date.now() - startTimeRef.current;
+    const averageAmplitude = average(samplesRef.current.amplitudes);
+    const averageFrequency = average(samplesRef.current.frequencies);
+
+    // Reset state
+    setAmplitude(0.12);
+    setFrequency(0.2);
+    setDurationSeconds(0);
+
+    // Validate we have speech segments
+    if (!vadResult || !speechSegmentsRef.current || speechSegmentsRef.current.length === 0) {
+      console.warn("[Recorder] No speech segments captured");
+      setError("No speech detected - please try recording again.");
+      return;
+    }
+
+    console.log(`[Recorder] Processing ${speechSegmentsRef.current.length} speech segments`);
+
+    // Concatenate all speech segments
+    const totalLength = speechSegmentsRef.current.reduce((sum, seg) => sum + seg.length, 0);
+    const concatenatedAudio = new Float32Array(totalLength);
+    let offset = 0;
+    for (const segment of speechSegmentsRef.current) {
+      concatenatedAudio.set(segment, offset);
+      offset += segment.length;
+    }
+
+    if (concatenatedAudio.length === 0) {
+      console.warn("[Recorder] Concatenated audio is empty");
+      setError("No speech detected - please try recording again.");
+      return;
+    }
+
+    // Check minimum speech duration (at least 0.5 seconds)
+    const speechDurationMs = (concatenatedAudio.length / 16000) * 1000;
+    if (speechDurationMs < 500) {
+      console.warn(`[Recorder] Speech too short: ${speechDurationMs}ms`);
+      setError("Recording too short - please speak for at least 1 second.");
+      return;
+    }
+
+    console.log(
+      `[Recorder] Captured ${speechSegmentsRef.current.length} speech segments, ` +
+      `${(speechDurationMs / 1000).toFixed(2)}s of speech from ${(durationMs / 1000).toFixed(2)}s total`
+    );
+
+    // Call completion callback with VAD-processed audio
+    if (onRecordingComplete) {
+      console.log("[Recorder] Calling onRecordingComplete with audio data");
+      onRecordingComplete({
+        audioData: concatenatedAudio, // Float32Array at 16kHz - ready for Whisper!
+        averageAmplitude,
+        durationMs,
+        frequency: averageFrequency,
+        speechDurationMs,
+        segmentCount: speechSegmentsRef.current.length,
+      });
+    } else {
+      console.warn("[Recorder] No onRecordingComplete callback provided");
+    }
+
+    // Reset
+    speechSegmentsRef.current = [];
+  }, [onRecordingComplete]);
 
   const startRecording = useCallback(async () => {
     if (isRecording) {
       return;
     }
 
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    if (!navigator.mediaDevices?.getUserMedia) {
       setError("Your browser does not support voice capture.");
       return;
     }
 
     try {
       setError("");
+      speechSegmentsRef.current = [];
       await wakeLockManager.requestWakeLock();
+
+      // Initialize VAD Manager
+      vadManagerRef.current = new VADManager((audioSegment) => {
+        // Callback for each speech segment detected
+        console.log(`[Recorder] Speech segment captured: ${audioSegment.length} samples`);
+        speechSegmentsRef.current.push(audioSegment);
+      });
+
+      // Start VAD (this will request microphone access internally)
+      await vadManagerRef.current.start();
+
+      // Set up audio analysis for visual feedback (amplitude/frequency)
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
 
@@ -121,10 +186,6 @@ export function useRecorder(onRecordingComplete) {
       const source = audioContext.createMediaStreamSource(stream);
       source.connect(analyser);
 
-      const mimeType = getSupportedMimeType();
-      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-
-      chunksRef.current = [];
       samplesRef.current = { amplitudes: [], frequencies: [] };
       startTimeRef.current = Date.now();
       streamRef.current = stream;
@@ -132,53 +193,6 @@ export function useRecorder(onRecordingComplete) {
       analyserRef.current = analyser;
       sourceRef.current = source;
 
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          chunksRef.current.push(event.data);
-        }
-      };
-
-      recorder.onstop = async () => {
-        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
-        const durationMs = Date.now() - startTimeRef.current;
-        const averageAmplitude = average(samplesRef.current.amplitudes);
-        const averageFrequency = average(samplesRef.current.frequencies);
-
-        await cleanupAudioGraph();
-        setAmplitude(0.12);
-        setFrequency(0.2);
-        setDurationSeconds(0);
-
-        // Validate recording before processing
-        if (!blob.size) {
-          setError("Recording failed - no audio data captured.");
-          return;
-        }
-
-        // Check minimum duration (at least 1 second)
-        if (durationMs < 1000) {
-          setError("Recording too short - please record for at least 1 second.");
-          return;
-        }
-
-        // Check if there was actual audio (not just silence)
-        if (averageAmplitude < 0.01) {
-          setError("No audio detected - please check your microphone and try again.");
-          return;
-        }
-
-        if (onRecordingComplete) {
-          await onRecordingComplete({
-            averageAmplitude,
-            blob,
-            durationMs,
-            frequency: averageFrequency,
-          });
-        }
-      };
-
-      recorder.start();
-      mediaRecorderRef.current = recorder;
       setIsRecording(true);
       isRecordingRef.current = true;
       setDurationSeconds(0);
@@ -187,12 +201,21 @@ export function useRecorder(onRecordingComplete) {
       timerRef.current = window.setInterval(() => {
         setDurationSeconds(Math.round((Date.now() - startTimeRef.current) / 1000));
       }, 250);
+
+      console.log("[Recorder] Started recording with VAD");
     } catch (recordingError) {
       await wakeLockManager.releaseWakeLock();
-      await cleanupAudioGraph();
+      
+      // Clean up VAD if it was started
+      if (vadManagerRef.current) {
+        vadManagerRef.current.stop();
+        vadManagerRef.current = null;
+      }
+
       setError(recordingError.message || "Microphone access was not granted.");
+      console.error("[Recorder] Error starting recording:", recordingError);
     }
-  }, [cleanupAudioGraph, isRecording, monitorLevels, onRecordingComplete]);
+  }, [isRecording, monitorLevels]);
 
   useEffect(() => {
     const onVisibility = () => {
@@ -204,10 +227,19 @@ export function useRecorder(onRecordingComplete) {
   }, []);
 
   useEffect(() => () => {
-    stopRecording();
-    cleanupAudioGraph();
-    wakeLockManager.releaseWakeLock().catch(() => undefined);
-  }, [cleanupAudioGraph, stopRecording]);
+    // Cleanup function - make it async-safe
+    (async () => {
+      await stopRecording();
+      
+      // Clean up VAD
+      if (vadManagerRef.current) {
+        await vadManagerRef.current.stop();
+        vadManagerRef.current = null;
+      }
+      
+      wakeLockManager.releaseWakeLock().catch(() => undefined);
+    })();
+  }, [stopRecording]);
 
   return {
     amplitude,

@@ -1,4 +1,6 @@
 import { format, formatDistanceToNowStrict, isWithinInterval, subDays } from "date-fns";
+import { BM25, reciprocalRankFusion } from "./bm25";
+import { generateAnswer } from "./rag-generator";
 
 const STOP_WORDS = new Set([
   "about",
@@ -26,6 +28,10 @@ const STOP_WORDS = new Set([
 const STRESS_WORDS = /(stress|stressed|anxious|pressure|urgent|panic|overwhelmed|deadline|worried|tense)/i;
 const SAD_WORDS = /(sad|tired|lonely|cry|miss|grief|hurt|low|down|heavy)/i;
 const CALM_WORDS = /(calm|steady|peaceful|gentle|rested|grateful|quiet|soft|breathe)/i;
+
+// BM25 cache to avoid recomputing IDF on every query
+let bm25Cache = null;
+let bm25CacheKey = null;
 
 export function sortMemoriesByNewest(memories) {
   return [...memories].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
@@ -109,6 +115,34 @@ export function vectorSearch(queryEmbedding, memories, limit = 5) {
     .slice(0, limit);
 }
 
+/**
+ * Hybrid retrieval: Vector search + BM25 + RRF
+ */
+export function hybridSearch(queryEmbedding, query, memories, limit = 10) {
+  if (!memories.length) {
+    return [];
+  }
+
+  // Vector search (semantic similarity)
+  const vectorResults = vectorSearch(queryEmbedding, memories, limit);
+
+  // BM25 search (lexical keyword matching) - with caching
+  const lastMemory = memories[memories.length - 1];
+  const cacheKey = `${memories.length}-${lastMemory?.createdAt || ""}`;
+  if (!bm25Cache || bm25CacheKey !== cacheKey) {
+    bm25Cache = new BM25(memories);
+    bm25CacheKey = cacheKey;
+    console.log("[BM25] Cache rebuilt for", memories.length, "memories");
+  }
+  
+  const bm25Results = bm25Cache.search(query, limit);
+
+  // Merge using Reciprocal Rank Fusion
+  const fusedResults = reciprocalRankFusion([vectorResults, bm25Results]);
+
+  return fusedResults.slice(0, limit);
+}
+
 function summarizeCollection(memories) {
   return memories
     .slice(0, 4)
@@ -127,7 +161,7 @@ function toReference(memory) {
   };
 }
 
-export function buildAssistantResponse(query, matches, allMemories) {
+export async function buildAssistantResponse(query, queryEmbedding, allMemories) {
   const cleanedQuery = query.trim().toLowerCase();
 
   if (!allMemories.length) {
@@ -137,6 +171,10 @@ export function buildAssistantResponse(query, matches, allMemories) {
     };
   }
 
+  // Use hybrid retrieval (vector + BM25 + RRF)
+  const matches = hybridSearch(queryEmbedding, query, allMemories, 10);
+
+  // Handle special cases with LLM-powered responses
   if (cleanedQuery.includes("last week")) {
     const weeklyMemories = allMemories.filter((memory) =>
       isWithinInterval(new Date(memory.createdAt), {
@@ -152,13 +190,24 @@ export function buildAssistantResponse(query, matches, allMemories) {
       };
     }
 
-    const energeticCount = weeklyMemories.filter((memory) => memory.emotion === "energetic").length;
-    const calmCount = weeklyMemories.filter((memory) => memory.emotion === "calm").length;
+    // Use LLM to synthesize weekly summary
+    try {
+      const topWeekly = weeklyMemories.slice(0, 3);
+      const generatedAnswer = await generateAnswer(query, topWeekly);
+      return {
+        answer: generatedAnswer,
+        references: topWeekly.map(toReference),
+      };
+    } catch (error) {
+      // Fallback to rule-based
+      const energeticCount = weeklyMemories.filter((memory) => memory.emotion === "energetic").length;
+      const calmCount = weeklyMemories.filter((memory) => memory.emotion === "calm").length;
 
-    return {
-      answer: `Over the last week, you captured ${weeklyMemories.length} memories. The strongest pattern was ${energeticCount > calmCount ? "high-energy moments" : "steadier, calmer reflections"}. ${summarizeCollection(weeklyMemories)}`,
-      references: weeklyMemories.slice(0, 3).map(toReference),
-    };
+      return {
+        answer: `Over the last week, you captured ${weeklyMemories.length} memories. The strongest pattern was ${energeticCount > calmCount ? "high-energy moments" : "steadier, calmer reflections"}. ${summarizeCollection(weeklyMemories)}`,
+        references: weeklyMemories.slice(0, 3).map(toReference),
+      };
+    }
   }
 
   if (STRESS_WORDS.test(cleanedQuery)) {
@@ -166,26 +215,51 @@ export function buildAssistantResponse(query, matches, allMemories) {
       (memory) => memory.emotion === "energetic" || STRESS_WORDS.test(memory.transcript),
     );
 
-    return {
-      answer: stressedMemories.length
-        ? `I found ${stressedMemories.length} memories that sound more pressured or intense. The most recent ones cluster around ${summarizeCollection(stressedMemories)}.`
-        : "I did not find a clear stress pattern in your saved memories yet.",
-      references: stressedMemories.slice(0, 3).map(toReference),
-    };
+    if (!stressedMemories.length) {
+      return {
+        answer: "I did not find a clear stress pattern in your saved memories yet.",
+        references: [],
+      };
+    }
+
+    // Use LLM to synthesize stress pattern analysis
+    try {
+      const topStressed = stressedMemories.slice(0, 3);
+      const generatedAnswer = await generateAnswer(query, topStressed);
+      return {
+        answer: generatedAnswer,
+        references: topStressed.map(toReference),
+      };
+    } catch (error) {
+      // Fallback to rule-based
+      return {
+        answer: `I found ${stressedMemories.length} memories that sound more pressured or intense. The most recent ones cluster around ${summarizeCollection(stressedMemories)}.`,
+        references: stressedMemories.slice(0, 3).map(toReference),
+      };
+    }
   }
 
-  if (cleanedQuery.includes("summarize") || cleanedQuery.includes("summary") || cleanedQuery.includes("overview")) {
-    const summaryMatches = matches.length ? matches : allMemories.slice(0, 4);
+  // For general queries, use LLM generation with top-3 retrieved memories
+  if (matches.length >= 3) {
+    const topMemories = matches.slice(0, 3);
 
-    return {
-      answer: `Here is your local summary: ${summarizeCollection(summaryMatches)}`,
-      references: summaryMatches.slice(0, 3).map(toReference),
-    };
+    try {
+      const generatedAnswer = await generateAnswer(query, topMemories);
+
+      return {
+        answer: generatedAnswer,
+        references: topMemories.map(toReference),
+      };
+    } catch (error) {
+      console.warn("[RAG] LLM generation failed, falling back to rule-based:", error);
+      // Fall through to rule-based response
+    }
   }
 
+  // Fallback to rule-based responses
   if (matches.length) {
     return {
-      answer: `I found ${matches.length} close memories for “${query.trim()}”. The clearest one says: ${matches[0].summary}`,
+      answer: `I found ${matches.length} close memories for "${query.trim()}". The clearest one says: ${matches[0].summary}`,
       references: matches.slice(0, 3).map(toReference),
     };
   }

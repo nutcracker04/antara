@@ -11,6 +11,12 @@
 # production
 /build
 
+# VAD and ONNX runtime files (copied from node_modules)
+/public/vad.worklet.bundle.min.js
+/public/silero_vad.onnx
+/public/*.wasm
+/public/*.mjs
+
 # misc
 .DS_Store
 .env.local
