@@ -154,13 +154,13 @@
                     if (adapter) {
                         addCheck('WebGPU', true, 'Available - will use faster whisper-base model');
                     } else {
-                        addWarning('WebGPU', 'API exists but no adapter - will use CPU (whisper-tiny)');
+                        addWarning('WebGPU', 'API exists but no adapter - will use CPU (whisper-base)');
                     }
                 } catch (e) {
-                    addWarning('WebGPU', 'Error requesting adapter - will use CPU (whisper-tiny)');
+                    addWarning('WebGPU', 'Error requesting adapter - will use CPU (whisper-base)');
                 }
             } else {
-                addWarning('WebGPU', 'Not available - will use CPU (whisper-tiny, slower but works)');
+                addWarning('WebGPU', 'Not available - will use CPU (whisper-base, slower but works)');
             }
 
             // IndexedDB

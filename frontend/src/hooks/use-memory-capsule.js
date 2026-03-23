@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { toast } from "@/components/ui/sonner";
+import { streamAssistantChat } from "@/lib/backend-chat";
 import { embedText, subscribeToAIStatus, transcribeAudio, warmupLocalModels } from "@/lib/ai-worker-client";
 import { clearMemories, getMemories, saveMemory } from "@/lib/memory-db";
 import {
-  buildAssistantResponse,
+  buildAssistantFallback,
   buildTags,
   detectEmotion,
+  getAssistantReferences,
   sortMemoriesByNewest,
   summarizeTranscript,
 } from "@/lib/memory-utils";
@@ -26,12 +28,12 @@ const defaultModelStatus = {
 
 function toFriendlyModelStatus(payload) {
   const labelMap = {
-    embedding: "Organizing your memory…",
-    error: "Something needs another try.",
-    "loading-embedder": "Getting your memory space ready…",
-    "loading-transcriber": "Getting your memory space ready…",
+    embedding: "Indexing your memory on this device…",
+    error: "The on-device assistant needs another try.",
+    "loading-embedder": "Preparing local search on this device…",
+    "loading-transcriber": "Preparing on-device speech processing…",
     ready: "Ready when you are.",
-    transcribing: "Turning your words into a memory…",
+    transcribing: "Transcribing on this device…",
   };
 
   if (payload.stage === "transcribing" && payload.percent != null) {
@@ -236,9 +238,11 @@ export function useMemoryCapsule() {
     [],
   );
 
-  const askAssistant = useCallback(
-    async (query) => {
-      if (!query.trim()) {
+  const streamAssistantReply = useCallback(
+    async ({ history = [], onChunk, query }) => {
+      const normalizedQuery = normalizeTranscript(query || "");
+
+      if (!normalizedQuery) {
         return { answer: "Ask a question about your memories.", references: [] };
       }
 
@@ -246,8 +250,29 @@ export function useMemoryCapsule() {
         return { answer: "You have not saved any memories yet.", references: [] };
       }
 
-      const queryEmbedding = await embedText(query);
-      return buildAssistantResponse(query, queryEmbedding, memories);
+      const queryEmbedding = await embedText(normalizedQuery);
+      const references = getAssistantReferences(normalizedQuery, queryEmbedding, memories);
+
+      if (!references.length) {
+        return {
+          answer: buildAssistantFallback(normalizedQuery, references),
+          references: [],
+        };
+      }
+
+      const answer = await streamAssistantChat({
+        history,
+        onChunk,
+        query: normalizedQuery,
+        references,
+      });
+
+      const normalizedAnswer = normalizeTranscript(answer);
+
+      return {
+        answer: normalizedAnswer || buildAssistantFallback(normalizedQuery, references),
+        references,
+      };
     },
     [memories],
   );
@@ -267,7 +292,6 @@ export function useMemoryCapsule() {
   }, []);
 
   return {
-    askAssistant,
     clearAllMemories,
     isLoading,
     memories,
@@ -275,6 +299,7 @@ export function useMemoryCapsule() {
     preferences,
     processRecording,
     processingState,
+    streamAssistantReply,
     updatePreference,
   };
 }

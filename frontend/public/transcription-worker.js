@@ -1,15 +1,12 @@
 import { env, pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/+esm";
+import { installHfHubFetch } from "./hf-hub-auth.js";
 
 // All processing is 100% local - models download once, cache forever
 env.allowLocalModels = false;
 env.allowRemoteModels = true;
 env.useBrowserCache = true;
 
-// Two-tier model selection:
-// - WebGPU: whisper-large-v3-turbo (high quality, ~800MB)
-// - WASM: distil-whisper-base.en (~80MB, fast on mobile)
-const WEBGPU_MODEL = "onnx-community/whisper-large-v3-turbo";
-const WASM_MODEL = "Xenova/distil-whisper-base.en";
+const WHISPER_BASE_MODEL = "Xenova/whisper-base.en";
 
 let transcriberPromise;
 let transcriberPreferredKey = "";
@@ -38,16 +35,20 @@ async function isWebGPUReliable() {
   }
 }
 
+function initializeRuntime(runtime = {}) {
+  installHfHubFetch(env, runtime.hfToken);
+}
+
 async function resolveTranscriberOptions() {
   const isWebGPUAvailable = await isWebGPUReliable();
   
   if (isWebGPUAvailable) {
-    console.log(`[Transcriber] Using ${WEBGPU_MODEL} with webgpu/fp16`);
-    return { device: "webgpu", dtype: "fp16", modelName: WEBGPU_MODEL };
+    console.log(`[Transcriber] Using ${WHISPER_BASE_MODEL} with webgpu/fp16`);
+    return { device: "webgpu", dtype: "fp16", modelName: WHISPER_BASE_MODEL };
   }
 
-  console.log(`[Transcriber] Using ${WASM_MODEL} with wasm/q8 (fallback)`);
-  return { device: "wasm", dtype: "q8", modelName: WASM_MODEL };
+  console.log(`[Transcriber] Using ${WHISPER_BASE_MODEL} with wasm/q8`);
+  return { device: "wasm", dtype: "q8", modelName: WHISPER_BASE_MODEL };
 }
 
 function loadTranscriberPipeline(options) {
@@ -67,31 +68,31 @@ async function getTranscriber() {
   if (!transcriberPromise || transcriberPreferredKey !== preferredKey) {
     transcriberPreferredKey = preferredKey;
     postStatus("Loading the on-device transcription model…", "loading-transcriber");
-    transcriberPromise = loadTranscriberPipeline(preferred)
-      .then((transcriber) => {
-        transcriberResolvedOptions = preferred;
-        return transcriber;
-      })
-      .catch(async (error) => {
-        if (preferred.device === "webgpu") {
-          postStatus("Falling back to CPU transcription…", "loading-transcriber");
-          const fallback = { device: "wasm", dtype: "q8", modelName: WASM_MODEL };
-          try {
-            const transcriber = await loadTranscriberPipeline(fallback);
-            transcriberResolvedOptions = fallback;
-            return transcriber;
-          } catch (fallbackError) {
-            transcriberPreferredKey = "";
-            transcriberPromise = undefined;
-            transcriberResolvedOptions = null;
-            throw fallbackError;
+    transcriberPromise = (async () => {
+      const candidates = preferred.device === "webgpu"
+        ? [preferred, { device: "wasm", dtype: "q8", modelName: WHISPER_BASE_MODEL }]
+        : [preferred];
+
+      let lastError;
+      for (const candidate of candidates) {
+        try {
+          if (candidate !== preferred) {
+            postStatus("Switching Whisper Base to the CPU runtime for this device…", "loading-transcriber");
           }
+          const transcriber = await loadTranscriberPipeline(candidate);
+          transcriberResolvedOptions = candidate;
+          return transcriber;
+        } catch (error) {
+          lastError = error;
+          console.warn("[Transcriber] Failed to load candidate", candidate, error);
         }
-        transcriberPreferredKey = "";
-        transcriberPromise = undefined;
-        transcriberResolvedOptions = null;
-        throw error;
-      });
+      }
+
+      transcriberPreferredKey = "";
+      transcriberPromise = undefined;
+      transcriberResolvedOptions = null;
+      throw lastError;
+    })();
   }
 
   const transcriber = await transcriberPromise;
@@ -102,6 +103,8 @@ self.onmessage = async (event) => {
   const { id, payload, type } = event.data;
 
   try {
+    initializeRuntime(payload?.runtime);
+
     if (type === "WARMUP") {
       await getTranscriber();
       self.postMessage({ id, type: "success", payload: { ok: true } });
@@ -123,9 +126,9 @@ self.onmessage = async (event) => {
         throw new Error("No audio data received for transcription");
       }
 
-      const minSamples = 8000;
+      const minSamples = 6000;
       if (audioData.length < minSamples) {
-        throw new Error("Audio too short - please record for at least 1 second");
+        throw new Error("Audio too short - please record for at least half a second");
       }
 
       let maxAmplitude = 0;
@@ -135,7 +138,7 @@ self.onmessage = async (event) => {
         if (abs > maxAmplitude) maxAmplitude = abs;
       }
       
-      if (maxAmplitude < 0.001) {
+      if (maxAmplitude < 0.0006) {
         throw new Error("No audio detected - please check your microphone");
       }
 
@@ -146,10 +149,6 @@ self.onmessage = async (event) => {
         progressValue = Math.min(progressValue + 6, 88);
         postProgress(id, progressValue, "transcribing");
       }, 450);
-
-      const rawLang = typeof payload.language === "string" && payload.language.trim().length > 0
-        ? payload.language.trim().split("-")[0]
-        : "en";
 
       console.log(`[Whisper] Processing ${audioData.length} samples (${(audioData.length / 16000).toFixed(2)}s)`);
       
@@ -179,7 +178,7 @@ self.onmessage = async (event) => {
         // Anti-hallucination thresholds
         compression_ratio_threshold: 2.4,
         logprob_threshold: -1.0,  
-        no_speech_threshold: 0.6,
+        no_speech_threshold: 0.45,
       };
 
       let result;
@@ -231,6 +230,7 @@ self.onmessage = async (event) => {
     }
   } catch (error) {
     postStatus("The transcription worker hit an error.", "error");
-    self.postMessage({ id, type: "error", error: error.message || "Transcription failed." });
+    const message = error.message || "Transcription failed.";
+    self.postMessage({ id, type: "error", error: message });
   }
 };

@@ -25,8 +25,8 @@ const PAGE_COPY = {
   },
   "/assistant": {
     label: "Assistant",
-    title: "Ask what your memories already know.",
-    description: "Ask naturally about what you captured and get simple answers with the right references.",
+    title: "Chat with the memories you already captured.",
+    description: "Type naturally, get grounded answers with source moments, and explore your saved memories like a conversation.",
   },
   "/settings": {
     label: "Settings",
@@ -116,7 +116,13 @@ function MemoryCapsuleShell() {
             />
             <Route
               path="/assistant"
-              element={<AssistantPage askAssistant={appState.askAssistant} memories={appState.memories} />}
+              element={
+                <AssistantPage
+                  memories={appState.memories}
+                  modelStatus={appState.modelStatus}
+                  streamAssistantReply={appState.streamAssistantReply}
+                />
+              }
             />
             <Route
               path="/settings"

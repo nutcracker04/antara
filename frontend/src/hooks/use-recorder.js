@@ -9,6 +9,19 @@ function average(values) {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 }
 
+function concatFloat32Arrays(chunks) {
+  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const result = new Float32Array(totalLength);
+  let offset = 0;
+
+  chunks.forEach((chunk) => {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  });
+
+  return result;
+}
+
 export function useRecorder(onRecordingComplete) {
   const [amplitude, setAmplitude] = useState(0.12);
   const [durationSeconds, setDurationSeconds] = useState(0);
@@ -88,61 +101,52 @@ export function useRecorder(onRecordingComplete) {
     setAmplitude(0.12);
     setFrequency(0.2);
     setDurationSeconds(0);
+    analyserRef.current = null;
+    sourceRef.current = null;
+    streamRef.current = null;
+    audioContextRef.current = null;
 
-    // Validate we have speech segments
-    if (!vadResult || !speechSegmentsRef.current || speechSegmentsRef.current.length === 0) {
-      console.warn("[Recorder] No speech segments captured");
-      setError("No speech detected - please try recording again.");
-      return;
-    }
+    const vadSegments = (vadResult?.segments || speechSegmentsRef.current || [])
+      .map((segment) => segment?.audio || segment)
+      .filter((segment) => segment instanceof Float32Array && segment.length > 0);
 
-    console.log(`[Recorder] Processing ${speechSegmentsRef.current.length} speech segments`);
+    const finalAudio = vadSegments.length ? concatFloat32Arrays(vadSegments) : new Float32Array(0);
+    const segmentCount = vadSegments.length;
+    speechSegmentsRef.current = [];
 
-    // Concatenate all speech segments
-    const totalLength = speechSegmentsRef.current.reduce((sum, seg) => sum + seg.length, 0);
-    const concatenatedAudio = new Float32Array(totalLength);
-    let offset = 0;
-    for (const segment of speechSegmentsRef.current) {
-      concatenatedAudio.set(segment, offset);
-      offset += segment.length;
-    }
-
-    if (concatenatedAudio.length === 0) {
-      console.warn("[Recorder] Concatenated audio is empty");
-      setError("No speech detected - please try recording again.");
+    if (finalAudio.length === 0) {
+      console.warn("[Recorder] No VAD speech segments captured");
+      setError("No speech detected by the on-device listener. Please try again in a quieter space or speak a little closer.");
       return;
     }
 
     // Check minimum speech duration (at least 0.5 seconds)
-    const speechDurationMs = (concatenatedAudio.length / 16000) * 1000;
+    const speechDurationMs = (finalAudio.length / 16000) * 1000;
     if (speechDurationMs < 500) {
       console.warn(`[Recorder] Speech too short: ${speechDurationMs}ms`);
-      setError("Recording too short - please speak for at least 1 second.");
+      setError("Recording too short - please speak for at least half a second.");
       return;
     }
 
     console.log(
-      `[Recorder] Captured ${speechSegmentsRef.current.length} speech segments, ` +
+      `[Recorder] Captured ${segmentCount} speech segments, ` +
       `${(speechDurationMs / 1000).toFixed(2)}s of speech from ${(durationMs / 1000).toFixed(2)}s total`
     );
 
     // Call completion callback with VAD-processed audio
     if (onRecordingComplete) {
       console.log("[Recorder] Calling onRecordingComplete with audio data");
-      onRecordingComplete({
-        audioData: concatenatedAudio, // Float32Array at 16kHz - ready for Whisper!
+      await onRecordingComplete({
+        audioData: finalAudio, // Float32Array at 16kHz - ready for Whisper!
         averageAmplitude,
         durationMs,
         frequency: averageFrequency,
         speechDurationMs,
-        segmentCount: speechSegmentsRef.current.length,
+        segmentCount,
       });
     } else {
       console.warn("[Recorder] No onRecordingComplete callback provided");
     }
-
-    // Reset
-    speechSegmentsRef.current = [];
   }, [onRecordingComplete]);
 
   const startRecording = useCallback(async () => {

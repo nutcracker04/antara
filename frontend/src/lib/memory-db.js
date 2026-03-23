@@ -157,7 +157,7 @@ function upgradeMemoryRecord(memory) {
     ...memory,
     summarySource: memory.summarySource || "rule-based",
     transcriptionDuration: memory.transcriptionDuration ?? 0,
-    transcriptionModel: memory.transcriptionModel || "whisper-tiny",
+    transcriptionModel: memory.transcriptionModel || "Xenova/whisper-base.en",
     embeddingModel: memory.embeddingModel || "needs-migration",
     version: memory.version ?? 2,
   };

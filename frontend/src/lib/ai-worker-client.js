@@ -14,6 +14,13 @@ function rejectAllPending(message) {
   pendingRequests.clear();
 }
 
+function getRuntimePayload() {
+  return {
+    hfToken: process.env.REACT_APP_HF_TOKEN || "",
+    publicUrl: process.env.PUBLIC_URL || "",
+  };
+}
+
 function createWorkerHandler(worker, workerName) {
   worker.onmessage = (event) => {
     const { id, type, payload, error } = event.data;
@@ -68,6 +75,12 @@ function createWorkerHandler(worker, workerName) {
       notifyStatus({ stage: "error", label: `${workerName} stopped unexpectedly.` });
       rejectAllPending(event.message || `${workerName} stopped unexpectedly.`);
     }
+  };
+
+  worker.onmessageerror = () => {
+    const errorMsg = `${workerName} returned an unreadable response.`;
+    notifyStatus({ stage: "error", label: errorMsg });
+    rejectAllPending(errorMsg);
   };
 }
 
@@ -133,12 +146,17 @@ function sendMessage(workerType, type, payload = {}) {
     pendingRequests.set(id, { resolve, reject });
 
     const transferables = [];
-    if (payload.audioData instanceof Float32Array) {
-      transferables.push(payload.audioData.buffer);
+    const messagePayload = {
+      ...payload,
+      runtime: getRuntimePayload(),
+    };
+
+    if (messagePayload.audioData instanceof Float32Array) {
+      transferables.push(messagePayload.audioData.buffer);
     }
 
     console.log(`[AI Worker Client] Posting message ${id} to ${workerType} worker`);
-    worker.postMessage({ id, type, payload }, transferables);
+    worker.postMessage({ id, type, payload: messagePayload }, transferables);
   });
 }
 
@@ -161,7 +179,7 @@ export async function transcribeAudio(audioData, options = {}) {
   return {
     text: response.text || "",
     chunks: response.chunks || null,
-    transcriptionModel: response.transcriptionModel || "distil-whisper-base|wasm|q8",
+    transcriptionModel: response.transcriptionModel || "Xenova/whisper-base.en|wasm|q8",
   };
 }
 

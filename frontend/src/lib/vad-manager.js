@@ -27,13 +27,7 @@ export class VADManager {
     this.speechSegments = [];
     this.sessionStartTime = Date.now();
 
-    // Try VAD first, fallback to MediaRecorder
-    try {
-      await this.startVAD();
-    } catch (vadError) {
-      console.warn("[VAD] VAD initialization failed, falling back to MediaRecorder:", vadError);
-      await this.startMediaRecorderFallback();
-    }
+    await this.startVAD();
   }
 
   async startVAD() {
@@ -104,80 +98,6 @@ export class VADManager {
   }
 
   /**
-   * MediaRecorder fallback when VAD fails
-   */
-  async startMediaRecorderFallback() {
-    console.log("[VAD] Starting MediaRecorder fallback mode");
-    
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      this.mediaRecorder = new MediaRecorder(stream);
-      this.recordedChunks = [];
-      
-      this.mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          this.recordedChunks.push(event.data);
-        }
-      };
-      
-      this.mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(this.recordedChunks, { type: "audio/webm" });
-        
-        // Convert blob to Float32Array at 16kHz for Whisper
-        const audioBuffer = await this.blobToAudioBuffer(audioBlob);
-        const float32Audio = this.resampleTo16kHz(audioBuffer);
-        
-        this.speechSegments.push({
-          audio: float32Audio,
-          timestamp: Date.now(),
-        });
-        
-        if (this.onSpeechEndCallback) {
-          this.onSpeechEndCallback(float32Audio);
-        }
-        
-        // Clean up
-        stream.getTracks().forEach(track => track.stop());
-      };
-      
-      this.mediaRecorder.start();
-      this.isActive = true;
-      this.usingFallback = true;
-      console.log("[VAD] MediaRecorder fallback started");
-    } catch (error) {
-      console.error("[VAD] MediaRecorder fallback failed:", error);
-      throw new Error("Could not access microphone");
-    }
-  }
-
-  async blobToAudioBuffer(blob) {
-    const arrayBuffer = await blob.arrayBuffer();
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    return await audioContext.decodeAudioData(arrayBuffer);
-  }
-
-  resampleTo16kHz(audioBuffer) {
-    const targetSampleRate = 16000;
-    const sourceSampleRate = audioBuffer.sampleRate;
-    
-    if (sourceSampleRate === targetSampleRate) {
-      return audioBuffer.getChannelData(0);
-    }
-    
-    const ratio = sourceSampleRate / targetSampleRate;
-    const sourceData = audioBuffer.getChannelData(0);
-    const targetLength = Math.round(sourceData.length / ratio);
-    const result = new Float32Array(targetLength);
-    
-    for (let i = 0; i < targetLength; i++) {
-      const sourceIndex = Math.floor(i * ratio);
-      result[i] = sourceData[sourceIndex];
-    }
-    
-    return result;
-  }
-
-  /**
    * Stop listening and return all captured segments
    * Returns a Promise to allow VAD to flush pending audio
    */
@@ -187,20 +107,6 @@ export class VADManager {
         segments: [],
         totalDurationMs: 0,
         speechDurationMs: 0,
-      };
-    }
-
-    // Handle MediaRecorder fallback
-    if (this.usingFallback && this.mediaRecorder) {
-      this.mediaRecorder.stop();
-      this.isActive = false;
-      this.usingFallback = false;
-      
-      const totalDurationMs = Date.now() - this.sessionStartTime;
-      return {
-        segments: this.speechSegments,
-        totalDurationMs,
-        speechDurationMs: totalDurationMs, // No VAD, so assume all is speech
       };
     }
 

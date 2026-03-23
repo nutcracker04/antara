@@ -1,4 +1,5 @@
 import { env, pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/+esm";
+import { installHfHubFetch } from "./hf-hub-auth.js";
 
 // All processing is 100% local - models download once, cache forever
 env.allowLocalModels = false;
@@ -18,7 +19,8 @@ async function getEmbedder() {
   if (!embedderPromise) {
     postStatus("Loading the local search model…", "loading-embedder");
     
-    const isWebGPUSupported = !!navigator.gpu;
+    const isMobile = /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+    const isWebGPUSupported = !!navigator.gpu && !isMobile;
     const embedderOptions = isWebGPUSupported
       ? { dtype: "fp16", device: "webgpu" }
       : { dtype: "q8", device: "wasm" };
@@ -28,6 +30,19 @@ async function getEmbedder() {
       progress_callback: () => {
         postStatus("Search model is loading locally…", "loading-embedder");
       },
+    }).catch(async (error) => {
+      if (embedderOptions.device === "webgpu") {
+        postStatus("Switching search to a lighter local runtime…", "loading-embedder");
+        return pipeline("feature-extraction", EMBEDDER_MODEL, {
+          dtype: "q8",
+          device: "wasm",
+          progress_callback: () => {
+            postStatus("Search model is loading locally…", "loading-embedder");
+          },
+        });
+      }
+
+      throw error;
     });
   }
 
@@ -38,6 +53,8 @@ self.onmessage = async (event) => {
   const { id, payload, type } = event.data;
 
   try {
+    installHfHubFetch(env, payload?.runtime?.hfToken);
+
     if (type === "WARMUP") {
       await getEmbedder();
       self.postMessage({ id, type: "success", payload: { ok: true } });
