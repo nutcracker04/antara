@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
-import axios from "axios";
+import { useMemo } from "react";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 
 import { BottomNav } from "@/components/ui/bottom-nav";
+import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { useMemoryCapsule } from "@/hooks/use-memory-capsule";
-import { getBackendApiUrl } from "@/lib/backend-url";
+import { usePwaInstall } from "@/hooks/use-pwa-install";
 import AssistantPage from "@/pages/assistant-page";
 import HomePage from "@/pages/home-page";
 import MemoriesPage from "@/pages/memories-page";
@@ -37,29 +37,7 @@ const PAGE_COPY = {
 function MemoryCapsuleShell() {
   const location = useLocation();
   const appState = useMemoryCapsule();
-  const [backendHealth, setBackendHealth] = useState({ status: "checking", label: "Preparing your space" });
-
-  useEffect(() => {
-    let active = true;
-
-    const checkBackend = async () => {
-      try {
-        await axios.get(getBackendApiUrl("/api/health"));
-        if (active) {
-          setBackendHealth({ status: "ok", label: "Ready to listen" });
-        }
-      } catch (error) {
-        if (active) {
-          setBackendHealth({ status: "offline", label: "Still getting ready" });
-        }
-      }
-    };
-
-    checkBackend();
-    return () => {
-      active = false;
-    };
-  }, []);
+  const pwaInstall = usePwaInstall();
 
   const currentCopy = useMemo(() => PAGE_COPY[location.pathname] || PAGE_COPY["/"], [location.pathname]);
 
@@ -80,19 +58,21 @@ function MemoryCapsuleShell() {
             <p className="max-w-[28rem] text-sm leading-relaxed text-[#4A4844]" data-testid="page-description">
               {currentCopy.description}
             </p>
+            {!pwaInstall.isInstalled ? (
+              <div className="pt-1">
+                <Button
+                  className="h-10 rounded-2xl border border-[#E8E4DB] bg-white/85 px-4 text-[#1A1918] hover:bg-[#F2EFE9]"
+                  data-testid="install-app-button-header"
+                  onClick={() => void pwaInstall.triggerInstall()}
+                  type="button"
+                  variant="outline"
+                >
+                  {pwaInstall.canInstall ? "Add to home screen" : "Install app"}
+                </Button>
+              </div>
+            ) : null}
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-[#6F6A62]">
-            <span className="rounded-full border border-[#E8E4DB] bg-white/60 px-3 py-1" data-testid="local-processing-chip">
-              Private by default
-            </span>
-            <span className="rounded-full border border-[#E8E4DB] bg-white/60 px-3 py-1" data-testid="memory-count-chip">
-              {appState.memories.length} memories saved
-            </span>
-            <span className="rounded-full border border-[#E8E4DB] bg-white/60 px-3 py-1" data-testid="backend-status-chip">
-              {appState.modelStatus.stage === "ready" ? backendHealth.label : appState.modelStatus.label}
-            </span>
-          </div>
         </header>
 
         <main className="flex-1">
@@ -130,6 +110,7 @@ function MemoryCapsuleShell() {
                   clearAllMemories={appState.clearAllMemories}
                   memoryCount={appState.memories.length}
                   preferences={appState.preferences}
+                  pwaInstall={pwaInstall}
                   updatePreference={appState.updatePreference}
                 />
               }

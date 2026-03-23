@@ -110,29 +110,16 @@ export default function HomePage({ memories, modelStatus, onProcessRecording, pr
             <VoiceWave amplitude={amplitude} density={frequency} emotion={activeEmotion} isRecording={isRecording} />
           </button>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full border border-[#E8E4DB] bg-white/65 px-3 py-2 text-xs text-[#4A4844]" data-testid="processing-stage-chip">
-              {processingState.message}
-            </span>
-            <span className="rounded-full border border-[#E8E4DB] bg-white/65 px-3 py-2 text-xs text-[#4A4844]" data-testid="model-status-chip">
-              {modelStatus.label}
-            </span>
-        {preferences.gentleMode ? (
-              <span className="rounded-full border border-[#E8E4DB] bg-white/65 px-3 py-2 text-xs text-[#4A4844]" data-testid="gentle-mode-chip">
-                Gentle mode is on
-              </span>
-            ) : null}
-          </div>
-
           {error ? (
             <p className="rounded-[24px] border border-[#F0D8CF] bg-[#FBF2EF] px-4 py-3 text-sm text-[#8D4936]" data-testid="recording-error-message">
               {error}
             </p>
           ) : null}
+
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3" data-testid="home-insights-grid">
+      <div className="grid gap-3 md:grid-cols-3" data-testid="home-insights-grid">
         <div className="glass-panel rounded-[24px] p-4" data-testid="insight-total-memories-card">
           <p className="editorial-label">Saved</p>
           <p className="mt-2 text-2xl text-[#1A1918]">{memories.length}</p>
@@ -168,7 +155,10 @@ export default function HomePage({ memories, modelStatus, onProcessRecording, pr
               The newest voice moment you save will appear here, ready to revisit whenever you need it.
             </p>
           </div>
-          <div className="rounded-full border border-[#E8E4DB] bg-white/70 px-3 py-1 text-sm text-[#1A1918]" data-testid="recent-memory-count">
+          <div
+            className="shrink-0 whitespace-nowrap rounded-full border border-[#E8E4DB] bg-white/70 px-3 py-1 text-sm leading-none text-[#1A1918]"
+            data-testid="recent-memory-count"
+          >
             {memories.length} saved
           </div>
         </div>

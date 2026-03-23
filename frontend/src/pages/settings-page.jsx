@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { captureInstallPrompt, getInstallInstructions, isInstalledPWA, promptInstall } from "@/lib/pwa-install";
+import { InstallCallout } from "@/components/ui/install-callout";
 import { isPromptApiAvailable } from "@/lib/prompt-api";
 
 const PREFERENCE_ITEMS = [
@@ -29,40 +29,14 @@ const PREFERENCE_ITEMS = [
   },
 ];
 
-export default function SettingsPage({ clearAllMemories, memoryCount, preferences, updatePreference }) {
-  const [installPrompt, setInstallPrompt] = useState(null);
-  const [isInstalled, setIsInstalled] = useState(isInstalledPWA());
+export default function SettingsPage({ clearAllMemories, memoryCount, preferences, pwaInstall, updatePreference }) {
   const [promptApiReady, setPromptApiReady] = useState(false);
 
   useEffect(() => {
     isPromptApiAvailable().then(setPromptApiReady).catch(() => setPromptApiReady(false));
   }, []);
 
-  useEffect(() => {
-    const handleBeforeInstall = (event) => {
-      setInstallPrompt(captureInstallPrompt(event));
-    };
-
-    const handleInstalled = () => setIsInstalled(true);
-
-    window.addEventListener("beforeinstallprompt", handleBeforeInstall);
-    window.addEventListener("appinstalled", handleInstalled);
-
-    return () => {
-      window.removeEventListener("beforeinstallprompt", handleBeforeInstall);
-      window.removeEventListener("appinstalled", handleInstalled);
-    };
-  }, []);
-
   const capsuleSize = useMemo(() => `${memoryCount} saved ${memoryCount === 1 ? "memory" : "memories"}`, [memoryCount]);
-  const installHelp = useMemo(() => getInstallInstructions(), []);
-
-  const handleInstall = async () => {
-    const outcome = await promptInstall(installPrompt);
-    if (outcome === "accepted") {
-      setInstallPrompt(null);
-    }
-  };
 
   const handleClear = async () => {
     if (!window.confirm("Clear every local memory on this device?")) {
@@ -100,36 +74,13 @@ export default function SettingsPage({ clearAllMemories, memoryCount, preference
 
       <Card className="rounded-[28px] border-[#E8E4DB] bg-[#FDFBF7]/85 shadow-[0_8px_32px_rgba(26,25,24,0.04)]">
         <CardContent className="space-y-4 p-5">
-          <div>
-            <p className="editorial-label" data-testid="install-card-label">
-              Installable app
-            </p>
-            <p className="mt-3 text-sm leading-relaxed text-[#4A4844]" data-testid="install-card-text">
-              Save Memory Capsule to your home screen for a quieter, more focused daily ritual.
-            </p>
-          </div>
-
-          <Button
-            className="h-12 rounded-2xl border border-[#E8E4DB] bg-white/80 text-[#1A1918] hover:bg-[#F2EFE9]"
-            data-testid="install-app-button"
-            disabled={!installPrompt || isInstalled}
-            onClick={handleInstall}
-            type="button"
-            variant="outline"
-          >
-            {isInstalled ? "Already installed" : installPrompt ? "Install app" : "Available when your browser offers it"}
-          </Button>
-
-          {!installPrompt && !isInstalled ? (
-            <div className="rounded-[22px] bg-[#F2EFE9] p-4 text-sm text-[#4A4844]">
-              <p className="editorial-label text-[#1A1918]">Manual install ({installHelp.platform})</p>
-              <ol className="mt-2 list-decimal space-y-1 pl-5">
-                {installHelp.steps.map((step) => (
-                  <li key={step}>{step}</li>
-                ))}
-              </ol>
-            </div>
-          ) : null}
+          <InstallCallout
+            canInstall={pwaInstall.canInstall}
+            installHelp={pwaInstall.installHelp}
+            isInstalled={pwaInstall.isInstalled}
+            onInstall={() => void pwaInstall.triggerInstall()}
+            variant="compact"
+          />
         </CardContent>
       </Card>
 

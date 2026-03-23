@@ -1,25 +1,29 @@
 {
+  "id": "/",
   "short_name": "Memory Capsule",
   "name": "Memory Capsule - Local First Voice Memory Journal",
-  "start_url": ".",
+  "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "browser"],
   "background_color": "#FDFBF7",
   "theme_color": "#FDFBF7",
   "description": "Capture and revisit voice memories with local-first transcription and search.",
   "orientation": "portrait",
+  "lang": "en",
   "categories": ["productivity", "lifestyle", "health"],
   "icons": [
     {
       "src": "./icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "any maskable"
     },
     {
       "src": "./icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "any maskable"
     },
     {
       "src": "./icon.svg",
