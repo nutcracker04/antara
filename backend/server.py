@@ -16,7 +16,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / ".env")
+load_dotenv(ROOT_DIR / ".env", override=True)
 
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 _groq_client: AsyncGroq | None = None
