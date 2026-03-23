@@ -5,12 +5,11 @@ import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 import { BottomNav } from "@/components/ui/bottom-nav";
 import { Toaster } from "@/components/ui/sonner";
 import { useMemoryCapsule } from "@/hooks/use-memory-capsule";
+import { getBackendApiUrl } from "@/lib/backend-url";
 import AssistantPage from "@/pages/assistant-page";
 import HomePage from "@/pages/home-page";
 import MemoriesPage from "@/pages/memories-page";
 import SettingsPage from "@/pages/settings-page";
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const PAGE_COPY = {
   "/": {
@@ -45,7 +44,7 @@ function MemoryCapsuleShell() {
 
     const checkBackend = async () => {
       try {
-        await axios.get(`${API}/health`);
+        await axios.get(getBackendApiUrl("/api/health"));
         if (active) {
           setBackendHealth({ status: "ok", label: "Ready to listen" });
         }

@@ -1,3 +1,5 @@
+import { getBackendBaseUrl } from "@/lib/backend-url";
+
 function toWebSocketUrl(baseUrl, path) {
   const url = new URL(path, baseUrl || window.location.origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -6,7 +8,7 @@ function toWebSocketUrl(baseUrl, path) {
 
 export function streamAssistantChat({ history = [], onChunk, query, references = [] }) {
   const requestId = `assistant-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const socketUrl = toWebSocketUrl(process.env.REACT_APP_BACKEND_URL, "/api/chat/ws");
+  const socketUrl = toWebSocketUrl(getBackendBaseUrl(), "/api/chat/ws");
 
   return new Promise((resolve, reject) => {
     let answer = "";
