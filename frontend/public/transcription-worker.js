@@ -11,6 +11,7 @@ const WHISPER_BASE_MODEL = "Xenova/whisper-base.en";
 let transcriberPromise;
 let transcriberPreferredKey = "";
 let transcriberResolvedOptions = null;
+const MOBILE_CHUNK_SECONDS = 5;
 
 function postStatus(label, stage) {
   self.postMessage({ type: "status", payload: { label, stage } });
@@ -33,6 +34,25 @@ async function isWebGPUReliable() {
   } catch {
     return false;
   }
+}
+
+function isConstrainedMobileRuntime() {
+  const userAgent = navigator.userAgent || "";
+  const isTouchMac = /Macintosh/i.test(userAgent) && (navigator.maxTouchPoints || 0) > 1;
+  const isMobile = /android|iphone|ipad|ipod/i.test(userAgent) || isTouchMac;
+  if (!isMobile) {
+    return false;
+  }
+
+  const deviceMemory = typeof navigator.deviceMemory === "number" ? navigator.deviceMemory : null;
+  const hardwareConcurrency = typeof navigator.hardwareConcurrency === "number" ? navigator.hardwareConcurrency : null;
+
+  return (
+    deviceMemory === null ||
+    deviceMemory <= 6 ||
+    hardwareConcurrency === null ||
+    hardwareConcurrency <= 8
+  );
 }
 
 function initializeRuntime(runtime = {}) {
@@ -97,6 +117,44 @@ async function getTranscriber() {
 
   const transcriber = await transcriberPromise;
   return { transcriber, options: transcriberResolvedOptions || preferred };
+}
+
+function normalizeResultText(result) {
+  const rawText = typeof result === "string" ? result : result?.text || "";
+  return rawText.replace(/\s+/g, " ").trim();
+}
+
+async function transcribeSequentially({ audioData, id, transcriber }) {
+  const chunkSize = MOBILE_CHUNK_SECONDS * 16000;
+  const totalChunks = Math.ceil(audioData.length / chunkSize);
+  const texts = [];
+
+  for (let index = 0; index < totalChunks; index += 1) {
+    const start = index * chunkSize;
+    const end = Math.min(start + chunkSize, audioData.length);
+    const audioChunk = audioData.subarray(start, end);
+    const result = await transcriber(audioChunk, {
+      chunk_length_s: MOBILE_CHUNK_SECONDS,
+      condition_on_previous_text: false,
+      force_full_sequences: false,
+      no_speech_threshold: 0.45,
+      return_timestamps: false,
+    });
+    const text = normalizeResultText(result);
+
+    if (text) {
+      texts.push(text);
+    }
+
+    const percent = 10 + Math.round(((index + 1) / totalChunks) * 90);
+    postProgress(id, percent, "transcribing");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  return {
+    chunks: null,
+    text: texts.join(" ").replace(/\s+/g, " ").trim(),
+  };
 }
 
 self.onmessage = async (event) => {
@@ -168,11 +226,12 @@ self.onmessage = async (event) => {
       const nonZeroPercent = (nonZeroCount / audioData.length * 100).toFixed(1);
       console.log(`[Whisper] Audio stats - min: ${minVal.toFixed(4)}, max: ${maxVal.toFixed(4)}, mean: ${mean.toFixed(4)}, non-zero: ${nonZeroPercent}%`);
 
+      const constrainedMobile = isConstrainedMobileRuntime();
       const asrOptions = {
-        chunk_length_s: 30,
-        stride_length_s: 5,
+        chunk_length_s: constrainedMobile ? 8 : 20,
+        stride_length_s: constrainedMobile ? 1 : 4,
         // Don't specify language or task for English-only models
-        return_timestamps: true,
+        return_timestamps: false,
         force_full_sequences: false,
         condition_on_previous_text: false,
         // Anti-hallucination thresholds
@@ -183,7 +242,11 @@ self.onmessage = async (event) => {
 
       let result;
       try {
-        result = await transcriber(audioData, asrOptions);
+        if (constrainedMobile && audioData.length > MOBILE_CHUNK_SECONDS * 16000) {
+          result = await transcribeSequentially({ audioData, id, transcriber });
+        } else {
+          result = await transcriber(audioData, asrOptions);
+        }
         console.log(`[Whisper] Result:`, result);
       } finally {
         clearInterval(progressTimer);
@@ -191,7 +254,7 @@ self.onmessage = async (event) => {
 
       postProgress(id, 100, "transcribing");
 
-      const text = typeof result === "string" ? result : result?.text || "";
+      const text = normalizeResultText(result);
       const chunks = result?.chunks || null;
 
       if (!text || text.trim().length === 0) {

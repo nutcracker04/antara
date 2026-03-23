@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { isConstrainedMobileDevice } from "@/lib/device-profile";
 import { WakeLockManager } from "@/lib/wake-lock";
 import { VADManager } from "@/lib/vad-manager";
 
 const wakeLockManager = new WakeLockManager();
+const MOBILE_MAX_RECORDING_MS = 8000;
 
 function average(values) {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
@@ -38,8 +40,10 @@ export function useRecorder(onRecordingComplete) {
   const startTimeRef = useRef(0);
   const streamRef = useRef(null);
   const timerRef = useRef(null);
+  const constrainedMobileRef = useRef(isConstrainedMobileDevice());
   const isRecordingRef = useRef(false);
   const speechSegmentsRef = useRef([]);
+  const autoStopTriggeredRef = useRef(false);
 
   const monitorLevels = useCallback(() => {
     if (!analyserRef.current) {
@@ -113,6 +117,7 @@ export function useRecorder(onRecordingComplete) {
     const finalAudio = vadSegments.length ? concatFloat32Arrays(vadSegments) : new Float32Array(0);
     const segmentCount = vadSegments.length;
     speechSegmentsRef.current = [];
+    autoStopTriggeredRef.current = false;
 
     if (finalAudio.length === 0) {
       console.warn("[Recorder] No VAD speech segments captured");
@@ -163,6 +168,7 @@ export function useRecorder(onRecordingComplete) {
       setError("");
       speechSegmentsRef.current = [];
       await wakeLockManager.requestWakeLock();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
       // Initialize VAD Manager
       vadManagerRef.current = new VADManager((audioSegment) => {
@@ -171,11 +177,10 @@ export function useRecorder(onRecordingComplete) {
         speechSegmentsRef.current.push(audioSegment);
       });
 
-      // Start VAD (this will request microphone access internally)
-      await vadManagerRef.current.start();
+      // Start VAD using the same microphone stream as the visualizer.
+      await vadManagerRef.current.start(stream);
 
       // Set up audio analysis for visual feedback (amplitude/frequency)
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
 
       if (!AudioContextClass) {
@@ -203,7 +208,17 @@ export function useRecorder(onRecordingComplete) {
       monitorLevels();
 
       timerRef.current = window.setInterval(() => {
-        setDurationSeconds(Math.round((Date.now() - startTimeRef.current) / 1000));
+        const elapsedMs = Date.now() - startTimeRef.current;
+        setDurationSeconds(Math.round(elapsedMs / 1000));
+
+        if (
+          constrainedMobileRef.current &&
+          !autoStopTriggeredRef.current &&
+          elapsedMs >= MOBILE_MAX_RECORDING_MS
+        ) {
+          autoStopTriggeredRef.current = true;
+          void stopRecording();
+        }
       }, 250);
 
       console.log("[Recorder] Started recording with VAD");
@@ -219,7 +234,7 @@ export function useRecorder(onRecordingComplete) {
       setError(recordingError.message || "Microphone access was not granted.");
       console.error("[Recorder] Error starting recording:", recordingError);
     }
-  }, [isRecording, monitorLevels]);
+  }, [isRecording, monitorLevels, stopRecording]);
 
   useEffect(() => {
     const onVisibility = () => {

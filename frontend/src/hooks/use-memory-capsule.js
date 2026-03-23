@@ -2,7 +2,15 @@ import { useCallback, useEffect, useState } from "react";
 
 import { toast } from "@/components/ui/sonner";
 import { streamAssistantChat } from "@/lib/backend-chat";
-import { embedText, subscribeToAIStatus, transcribeAudio, warmupLocalModels } from "@/lib/ai-worker-client";
+import {
+  disposeEmbeddingWorker,
+  disposeTranscriptionWorker,
+  embedText,
+  subscribeToAIStatus,
+  transcribeAudio,
+  warmupLocalModels,
+} from "@/lib/ai-worker-client";
+import { isConstrainedMobileDevice } from "@/lib/device-profile";
 import { clearMemories, getMemories, saveMemory } from "@/lib/memory-db";
 import {
   buildAssistantFallback,
@@ -65,7 +73,12 @@ function normalizeTranscript(text) {
   return text.replace(/\s+/g, " ").trim();
 }
 
+function replaceMemoryInList(memories, nextMemory) {
+  return sortMemoriesByNewest(memories.map((memory) => (memory.id === nextMemory.id ? nextMemory : memory)));
+}
+
 export function useMemoryCapsule() {
+  const constrainedMobile = isConstrainedMobileDevice();
   const [memories, setMemories] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [processingState, setProcessingState] = useState(defaultProcessingState);
@@ -84,7 +97,7 @@ export function useMemoryCapsule() {
           
           // Lazy re-embedding for migrated memories
           const needsReembed = storedMemories.filter(m => m.embeddingModel === "pending-reembed");
-          if (needsReembed.length > 0) {
+          if (needsReembed.length > 0 && !constrainedMobile) {
             console.log(`[Migration] Found ${needsReembed.length} memories needing re-embedding`);
             
             // Re-embed one at a time when idle
@@ -137,18 +150,22 @@ export function useMemoryCapsule() {
       }
     });
 
-    const warmupTimer = window.setTimeout(() => {
-      // Warmup models before recording starts
-      // This ensures VAD's Silero ONNX model is loaded before first use
-      warmupLocalModels().catch(() => undefined);
-    }, 1200);
+    const warmupTimer = constrainedMobile
+      ? null
+      : window.setTimeout(() => {
+          // On constrained mobile browsers, eager-loading both local models
+          // makes recording much less stable.
+          warmupLocalModels().catch(() => undefined);
+        }, 1200);
 
     return () => {
       active = false;
-      window.clearTimeout(warmupTimer);
+      if (warmupTimer != null) {
+        window.clearTimeout(warmupTimer);
+      }
       unsubscribe();
     };
-  }, []);
+  }, [constrainedMobile]);
 
   const processRecording = useCallback(
     async ({ audioData, averageAmplitude, durationMs, frequency, speechDurationMs, segmentCount }) => {
@@ -167,6 +184,10 @@ export function useMemoryCapsule() {
         const { text: transcriptRaw, transcriptionModel } = await transcribeAudio(audioData, {
           language: getTranscriptionLanguageHint(),
         });
+
+        if (constrainedMobile) {
+          disposeTranscriptionWorker();
+        }
         
         console.log(`[Processing] Raw transcript (${transcriptRaw.length} chars):`, transcriptRaw);
         
@@ -185,10 +206,6 @@ export function useMemoryCapsule() {
         }
 
         const prefs = await loadPreferences();
-
-        setProcessingState({ stage: "embedding", message: "Saving it so you can find it later…" });
-        const embedding = await embedText(transcript);
-
         let summary;
         let summarySource = "rule-based";
 
@@ -208,7 +225,7 @@ export function useMemoryCapsule() {
           durationMs,
           speechDurationMs,
           segmentCount,
-          embedding,
+          embedding: null,
           emotion: detectEmotion(transcript, averageAmplitude),
           frequency,
           summary,
@@ -217,25 +234,68 @@ export function useMemoryCapsule() {
           transcript,
           transcriptionDuration,
           transcriptionModel,
+          embeddingModel: constrainedMobile ? "pending-reembed" : "pending-local-embed",
           version: 3, // Bumped version for VAD-based recordings
         };
 
         await saveMemory(memory);
         setMemories((currentMemories) => sortMemoriesByNewest([memory, ...currentMemories]));
-        setProcessingState({ stage: "saved", message: "Saved to your capsule." });
-        toast.success("Saved to your capsule.");
+        setProcessingState({
+          stage: constrainedMobile ? "saved" : "embedding",
+          message: constrainedMobile
+            ? "Saved locally. Finishing the on-device index in the background…"
+            : "Saving it so you can find it later…",
+        });
+        toast.success(constrainedMobile ? "Saved locally on this device." : "Saved to your capsule.");
+
+        const finalizeEmbedding = async () => {
+          try {
+            const embedding = await embedText(transcript);
+            const indexedMemory = {
+              ...memory,
+              embedding,
+              embeddingModel: "bge-small-en-v1.5",
+            };
+
+            await saveMemory(indexedMemory);
+            setMemories((currentMemories) => replaceMemoryInList(currentMemories, indexedMemory));
+            setProcessingState({ stage: "saved", message: "Saved to your capsule." });
+          } catch (embeddingError) {
+            console.warn("[Processing] Background embedding failed:", embeddingError);
+            setProcessingState({
+              stage: "saved",
+              message: "Saved locally. Search will sharpen up after a stronger device session.",
+            });
+          } finally {
+            if (constrainedMobile) {
+              disposeEmbeddingWorker();
+            }
+          }
+        };
+
+        if (constrainedMobile) {
+          window.setTimeout(() => {
+            void finalizeEmbedding();
+          }, 0);
+        } else {
+          await finalizeEmbedding();
+        }
         
         console.log(`[Processing] Memory saved successfully:`, memory.id);
         
         return memory;
       } catch (error) {
+        if (constrainedMobile) {
+          disposeTranscriptionWorker();
+          disposeEmbeddingWorker();
+        }
         console.error("[Processing] Error:", error);
         setProcessingState({ stage: "error", message: error.message || "Something went wrong while processing your memory." });
         toast.error(error.message || "I couldn't process that recording.");
         throw error;
       }
     },
-    [],
+    [constrainedMobile],
   );
 
   const streamAssistantReply = useCallback(

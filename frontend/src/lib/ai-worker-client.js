@@ -14,6 +14,17 @@ function rejectAllPending(message) {
   pendingRequests.clear();
 }
 
+function rejectPendingForWorker(workerType, message) {
+  pendingRequests.forEach((request, id) => {
+    if (request.workerType !== workerType) {
+      return;
+    }
+
+    pendingRequests.delete(id);
+    request.reject(new Error(message));
+  });
+}
+
 function getRuntimePayload() {
   return {
     hfToken: process.env.REACT_APP_HF_TOKEN || "",
@@ -143,7 +154,7 @@ function sendMessage(workerType, type, payload = {}) {
 
     const id = `ai-${requestCount + 1}`;
     requestCount += 1;
-    pendingRequests.set(id, { resolve, reject });
+    pendingRequests.set(id, { resolve, reject, workerType });
 
     const transferables = [];
     const messagePayload = {
@@ -186,6 +197,26 @@ export async function transcribeAudio(audioData, options = {}) {
 export async function embedText(text) {
   const response = await sendMessage("embedding", "EMBED", { text });
   return response.embedding || [];
+}
+
+export function disposeTranscriptionWorker() {
+  if (!transcriptionWorker) {
+    return;
+  }
+
+  rejectPendingForWorker("transcription", "Transcription worker was reset.");
+  transcriptionWorker.terminate();
+  transcriptionWorker = undefined;
+}
+
+export function disposeEmbeddingWorker() {
+  if (!embeddingWorker) {
+    return;
+  }
+
+  rejectPendingForWorker("embedding", "Embedding worker was reset.");
+  embeddingWorker.terminate();
+  embeddingWorker = undefined;
 }
 
 // Alias for migration code compatibility

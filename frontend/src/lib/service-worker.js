@@ -19,8 +19,6 @@ export function registerServiceWorker() {
     navigator.serviceWorker
       .register(getServiceWorkerUrl())
       .then((registration) => {
-        registration.update().catch(() => undefined);
-
         registration.addEventListener("updatefound", () => {
           const installingWorker = registration.installing;
           if (!installingWorker) {

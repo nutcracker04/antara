@@ -18,7 +18,7 @@ export class VADManager {
   /**
    * Start listening for speech
    */
-  async start() {
+  async start(stream) {
     if (this.isActive) {
       console.warn("[VAD] Already active");
       return;
@@ -27,10 +27,10 @@ export class VADManager {
     this.speechSegments = [];
     this.sessionStartTime = Date.now();
 
-    await this.startVAD();
+    await this.startVAD(stream);
   }
 
-  async startVAD() {
+  async startVAD(stream) {
     // Dynamically import VAD library
     let MicVAD;
     try {
@@ -48,6 +48,7 @@ export class VADManager {
       this.vad = await MicVAD.new({
         workletURL: `${publicUrl}/vad.worklet.bundle.min.js`,
         modelURL: `${publicUrl}/silero_vad.onnx`,
+        stream,
         
         // Configure ONNX runtime to use local files
         ortConfig(ort) {
@@ -55,12 +56,16 @@ export class VADManager {
           ort.env.wasm.wasmPaths = `${publicUrl}/`;
         },
         
-        // VAD Sensitivity Tweaks - balanced to reduce fragmentation
-        positiveSpeechThreshold: 0.5,
-        negativeSpeechThreshold: 0.4,
-        minSpeechFrames: 3,
-        preSpeechPadFrames: 2,
-        redemptionFrames: 8, // Lower for more responsive end detection
+        // Flush the current utterance when the user stops manually.
+        submitUserSpeechOnPause: true,
+
+        // Slightly more permissive thresholds help mobile/PWA microphone
+        // input where gain/noise processing can make speech look softer.
+        positiveSpeechThreshold: 0.42,
+        negativeSpeechThreshold: 0.3,
+        minSpeechFrames: 2,
+        preSpeechPadFrames: 3,
+        redemptionFrames: 12,
 
         onSpeechStart: () => {
           console.log("[VAD] Speech detected...");
@@ -120,13 +125,15 @@ export class VADManager {
     }
 
     // Pause first — this flushes any in-progress speech segment
-    // and triggers onSpeechEnd for buffered audio
+    // and triggers onSpeechEnd for buffered audio because
+    // submitUserSpeechOnPause is enabled.
     this.vad.pause();
     
     // Wait for the flush to complete before destroying
     await new Promise(resolve => setTimeout(resolve, 300));
     
     this.vad.destroy();
+    this.vad = null;
     this.isActive = false;
 
     const totalDurationMs = Date.now() - this.sessionStartTime;

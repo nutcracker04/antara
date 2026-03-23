@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { MemoryCard } from "@/components/ui/memory-card";
 import { VoiceWave } from "@/components/ui/voice-wave";
 import { useRecorder } from "@/hooks/use-recorder";
+import { isConstrainedMobileDevice } from "@/lib/device-profile";
 
 export default function HomePage({ memories, modelStatus, onProcessRecording, preferences, processingState }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -13,6 +14,7 @@ export default function HomePage({ memories, modelStatus, onProcessRecording, pr
   const suppressClickRef = useRef(false);
 
   const { amplitude, durationSeconds, error, frequency, isRecording, startRecording, stopRecording } = useRecorder(onProcessRecording);
+  const constrainedMobile = useMemo(() => isConstrainedMobileDevice(), []);
 
   useEffect(() => {
     if (searchParams.get("action") !== "record") {
@@ -83,7 +85,9 @@ export default function HomePage({ memories, modelStatus, onProcessRecording, pr
                 Capture a moment
               </p>
               <p className="mt-2 text-sm leading-relaxed text-[#4A4844]" data-testid="recording-instructions-text">
-                Keep this screen on while you capture—Memory Capsule works best as an active session. Tap to begin and end a memory, or hold for a quick thought.
+                {constrainedMobile
+                  ? "Keep this screen on while you capture. On mobile, local-only recording is tuned for quick notes so the app stays stable and private."
+                  : "Keep this screen on while you capture—Memory Capsule works best as an active session. Tap to begin and end a memory, or hold for a quick thought."}
               </p>
             </div>
 

@@ -79,9 +79,10 @@ let webpackConfig = {
                   url.hostname.endsWith(".hf.co"),
               },
               {
-                handler: "CacheFirst",
+                handler: "NetworkFirst",
                 options: {
-                  cacheName: "memory-capsule-runtime-v1",
+                  cacheName: "memory-capsule-runtime-v2",
+                  networkTimeoutSeconds: 3,
                   expiration: {
                     maxAgeSeconds: 60 * 60 * 24 * 7,
                     maxEntries: 40,
@@ -93,6 +94,7 @@ let webpackConfig = {
                   self.location.origin === url.origin &&
                   (url.pathname === "/transcription-worker.js" ||
                     url.pathname === "/embedding-worker.js" ||
+                    url.pathname === "/hf-hub-auth.js" ||
                     url.pathname === "/manifest.json" ||
                     url.pathname.endsWith(".png") ||
                     url.pathname.endsWith(".svg")),
